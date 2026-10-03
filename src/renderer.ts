@@ -32,11 +32,14 @@ void main() {
  */
 /** Ceiling on the warp knots; the shader loop needs a constant bound. */
 export const MAX_KNOTS = 8;
+/** Ceiling on the pinned level lines, for the same reason. */
+export const MAX_PINS = 8;
 
 const SLICE_FS = `#version 300 es
 precision highp float;
 precision highp sampler3D;
 #define MAX_KNOTS ${MAX_KNOTS}
+#define MAX_PINS ${MAX_PINS}
 in vec3 vWorld;
 uniform sampler3D uVol;
 uniform mat4 uWorldToTex;
@@ -52,7 +55,29 @@ uniform bool uDiscardOutside;
 uniform int uKnotN;
 uniform float uKnotX[MAX_KNOTS];
 uniform float uKnotY[MAX_KNOTS];
+uniform bool uIsoLiveOn;
+uniform float uIsoLive;
+uniform int uPinN;
+uniform float uPins[MAX_PINS];
+uniform int uPinHot;       // index of the highlighted pin, or -1
 out vec4 fragColor;
+
+const vec3 ISO_INK = vec3(0.95);
+const vec3 ISO_HOT = vec3(0.898, 0.651, 0.353);   // the bar's orange, --cb-live
+
+/**
+ * A level line of half-width w pixels, with a dark halo, over colour c. The
+ * distance to the level is measured in pixels by dividing by the value's
+ * screen-space rate of change, which keeps the line the same width however
+ * steep the field is.
+ */
+vec3 isoLine(vec3 c, float v, float fw, float level, vec3 ink, float w) {
+  float d = abs(v - level) / max(fw, 1e-6);
+  float halo = 1.0 - smoothstep(w + 0.9, w + 1.9, d);
+  float core = 1.0 - smoothstep(w - 0.5, w + 0.5, d);
+  c = mix(c, vec3(0.0), halo * 0.6);
+  return mix(c, ink, core);
+}
 
 /** The transfer function: piecewise linear through the knots, (0,0) to (1,1). */
 float warp(float t) {
@@ -91,16 +116,29 @@ void main() {
     else acc += v;
     count++;
   }
+  float v = count == 0 ? 0.0 : (uSlabMode == 1 ? acc / float(count) : acc);
+  // Derivatives before any discard or return, while the whole quad is still
+  // running. Where the quad straddles the edge of the volume the rate of
+  // change is the jump to outside, not the field, so no line is drawn there.
+  float fw = fwidth(v);
+  float edge = fwidth(count > 0 ? 1.0 : 0.0);
   if (count == 0) {
     if (uDiscardOutside) discard;
     fragColor = vec4(0.0, 0.0, 0.0, 1.0);
     return;
   }
-  float v = uSlabMode == 1 ? acc / float(count) : acc;
   float g = warp(clamp((v - uWinLo) / max(uWinHi - uWinLo, 1e-6), 0.0, 1.0));
   vec3 c = vec3(g);
   if (v < uWinLo && uUnder.a > 0.5) c = uUnder.rgb;
   else if (v > uWinHi && uOver.a > 0.5) c = uOver.rgb;
+  if (edge == 0.0) {
+    for (int i = 0; i < MAX_PINS; i++) {
+      if (i >= uPinN) break;
+      bool hot = i == uPinHot;
+      c = isoLine(c, v, fw, uPins[i], hot ? ISO_HOT : ISO_INK, hot ? 1.1 : 0.6);
+    }
+    if (uIsoLiveOn) c = isoLine(c, v, fw, uIsoLive, ISO_INK, 0.75);
+  }
   fragColor = vec4(c, 1.0);
 }`;
 
@@ -334,9 +372,14 @@ export class Renderer {
 
   setVolume(vol: Volume): void {
     const gl = this.gl;
-    if (this.tex) gl.deleteTexture(this.tex);
-    this.tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_3D, this.tex);
+    // Drain stale errors so the check below only sees this upload's.
+    for (let i = 0; i < 16 && gl.getError() !== gl.NO_ERROR; i++) {
+      /* drain */
+    }
+    // Build the new texture beside the old one, which is only dropped once the
+    // upload has worked: a volume that fails leaves the current one on screen.
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_3D, tex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -358,8 +401,12 @@ export class Renderer {
     );
     const err = gl.getError();
     if (err !== gl.NO_ERROR) {
+      gl.deleteTexture(tex);
+      gl.bindTexture(gl.TEXTURE_3D, this.tex);
       throw new Error(`No se pudo subir el volumen a la GPU (error GL ${err}). Puede ser demasiado grande.`);
     }
+    if (this.tex) gl.deleteTexture(this.tex);
+    this.tex = tex;
 
     // world mm -> texture coords in [0,1]^3
     const m = mat4.create();
@@ -411,8 +458,16 @@ export class Renderer {
     alpha = 1,
     strip = false,
     depth: DepthMode = 'off',
+    nudge = 0,
   ): void {
     if (verts.length === 0) return;
+    // Below one pixel there is no thinner line to draw, so a fractional width
+    // is drawn as one pixel covering that fraction: the same ink, spread
+    // fainter, which the eye reads as a finer line.
+    if (width < 1 && !strip) {
+      alpha *= Math.max(0, width);
+      width = 1;
+    }
     const gl = this.gl;
     if (verts.length > this.lineData.length) this.lineData = new Float32Array(verts.length * 2);
     this.lineData.set(verts);
@@ -423,6 +478,12 @@ export class Renderer {
     gl.useProgram(this.lineProg);
     gl.uniformMatrix4fv(this.lineU['uMVP'] ?? null, false, mvp);
     this.setDepth(depth);
+    // Polygon offset only acts on filled triangles, which is what a nudged
+    // strip is; a step or two settles a coplanar tie either way.
+    if (nudge) {
+      gl.enable(gl.POLYGON_OFFSET_FILL);
+      gl.polygonOffset(nudge, 2 * nudge);
+    }
 
     const blend = alpha < 1;
     if (blend) {
@@ -455,6 +516,7 @@ export class Renderer {
     }
 
     if (blend) gl.disable(gl.BLEND);
+    if (nudge) gl.disable(gl.POLYGON_OFFSET_FILL);
   }
 
   /** Draw a packed ribbon: see RIBBON_STRIDE for the vertex layout. */
@@ -548,6 +610,12 @@ export class Renderer {
       gl.uniform1fv(this.sliceU['uKnotX[0]'] ?? null, knots.map((k) => k.x));
       gl.uniform1fv(this.sliceU['uKnotY[0]'] ?? null, knots.map((k) => k.y));
     }
+    gl.uniform1i(this.sliceU['uIsoLiveOn'] ?? null, scene.isoLive === null ? 0 : 1);
+    gl.uniform1f(this.sliceU['uIsoLive'] ?? null, scene.isoLive ?? 0);
+    const pins = scene.isoPins.slice(0, MAX_PINS);
+    gl.uniform1i(this.sliceU['uPinN'] ?? null, pins.length);
+    if (pins.length) gl.uniform1fv(this.sliceU['uPins[0]'] ?? null, pins);
+    gl.uniform1i(this.sliceU['uPinHot'] ?? null, scene.isoHot);
     gl.uniform1i(this.sliceU['uUse3D'] ?? null, o.use3D ? 1 : 0);
     gl.uniform1i(this.sliceU['uDiscardOutside'] ?? null, o.discardOutside ? 1 : 0);
     gl.uniformMatrix4fv(this.sliceU['uMVP'] ?? null, false, o.mvp);
@@ -620,7 +688,7 @@ export class Renderer {
       }
       // Thin while oblique, thick once the plane lands on one of the grid's
       // own cartesian planes: the weight of the border says it is aligned.
-      const w = scene.alignedToGrid() ? 3 : 1;
+      const w = scene.alignedToGrid() ? 3 : 0.5;
       this.drawLines(verts, scene.normalColor(), mvp, w, 1, false, 'off');
     }
 
@@ -636,6 +704,7 @@ export class Renderer {
           batch.alpha ?? 1,
           batch.strip,
           batch.depth ?? 'off',
+          batch.nudge,
         );
       }
     }

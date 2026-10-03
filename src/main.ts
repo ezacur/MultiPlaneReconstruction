@@ -79,6 +79,12 @@ const colorbar = new Colorbar($<HTMLElement>('#colorbar'), {
     scene.overColor = over;
     requestRender();
   },
+  onLevels: (live, pins, hot) => {
+    scene.isoLive = live;
+    scene.isoPins = pins;
+    scene.isoHot = hot;
+    requestRender();
+  },
 });
 let renderer: Renderer;
 try {
@@ -270,10 +276,10 @@ function buildWlControls(vol: Volume): void {
   for (const p of all) {
     const b = document.createElement('button');
     b.textContent = p.label;
+    // Through the bar, so the jump slides with its easing instead of landing.
     b.addEventListener('click', () => {
-      scene.windowWidth = Math.max(1e-3, p.w);
-      scene.windowLevel = p.l;
-      requestRender();
+      const w = Math.max(1e-3, p.w);
+      colorbar.animateTo(p.l - w / 2, p.l + w / 2);
     });
     wlPresetsEl.appendChild(b);
   }
@@ -396,6 +402,9 @@ attachInteraction(pane, scene, widget, {
   },
   onResetCamera: resetCamera,
   onPlane: goToPlane,
+  onPinLevel: () => {
+    if (probe) colorbar.pinLevel(scene.sampleWorld(probe));
+  },
 });
 
 new ResizeObserver(() => requestRender()).observe(viewsRoot);

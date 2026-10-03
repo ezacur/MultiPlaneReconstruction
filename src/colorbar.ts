@@ -1,4 +1,5 @@
 import type { Volume } from './nifti';
+import { MAX_KNOTS, MAX_PINS } from './renderer';
 
 /**
  * Vertical grayscale colour bar, after `icolorbar_demo.html`.
@@ -59,6 +60,16 @@ const QUANT_BINS = 4096;
 const PCTS = [0, 2, 5, 10, 25, 50, 75, 90, 95, 98, 100];
 /** Two percentile labels closer than this, in pixels, cannot both show. */
 const GUIDE_CLEARANCE = 13;
+/** How long the histogram takes to fold or unfold, in milliseconds. */
+const HIST_ANIM_MS = 550;
+/** Below this width the percentile labels and the Ctrl guides do not fit, and
+ *  are hidden; it is only ever crossed during the fold animation. */
+const PCT_MIN = 30;
+/** A double click this close to a handle, in pixels, counts as on it. */
+const HANDLE_HIT = 8;
+
+const easeOut = (k: number) => 1 - Math.pow(1 - k, 3);
+const easeInOut = (k: number) => (k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2);
 
 type Limit = 'lo' | 'hi';
 
@@ -88,15 +99,15 @@ function niceTicks(a: number, b: number, count: number): number[] {
   const mag = Math.pow(10, Math.floor(Math.log10(raw)));
   const norm = raw / mag;
   const step = (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
+  // By index rather than accumulating v += step: the running sum drifts in
+  // floating point, and a tick meant for 0 comes out as -5.6e-17.
   const out: number[] = [];
-  for (let v = Math.ceil(a / step) * step; v <= b + step * 1e-6; v += step) out.push(v);
+  for (let n = Math.ceil(a / step); n * step <= b + step * 1e-6; n++) out.push(n * step);
   return out;
 }
 
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 
-/** Most warp knots the ramp can carry; the shader loop needs a fixed bound. */
-const MAX_KNOTS = 8;
 /** Knots are kept this far from the ends of the window and from each other. */
 const KNOT_MARGIN = 0.03;
 const KNOT_GAP = 0.02;
@@ -125,6 +136,11 @@ export interface ColorbarHooks {
   onWarp(knots: Knot[]): void;
   /** A saturation colour changed; null means "use the end of the ramp". */
   onSaturation(under: [number, number, number] | null, over: [number, number, number] | null): void;
+  /**
+   * The level lines changed: the live one (null when off), the pinned ones,
+   * and the index of the highlighted pin, or -1.
+   */
+  onLevels(live: number | null, pins: number[], hot: number): void;
 }
 
 export class Colorbar {
@@ -167,6 +183,38 @@ export class Colorbar {
   private autoT = 0;
   private raf = 0;
   private histOpen = true;
+
+  /**
+   * Caches, as in the demo. The host calls render() on every frame of the 3D
+   * view, most of them for a pointer move that changes nothing here but the
+   * needle, so everything else is redrawn only when its signature changes.
+   */
+  private renderSig = '';
+  /** Height of the track; read once per render, since a read after the style
+   *  writes of the same render forces a synchronous reflow. */
+  private trackH = 1;
+  /** The bar's pixels, reused between frames instead of a fresh canvas each. */
+  private barImg: ImageData | null = null;
+  private barPx: Uint32Array | null = null;
+  /** Read on every pointer move; dropped on resize, scroll and layout changes. */
+  private trackRect: DOMRect | null = null;
+  private barRect: DOMRect | null = null;
+
+  /** Width of the histogram column, animated between HIST_W and 0. */
+  private histW = HIST_W;
+  private histAnim: { from: number; to: number; start: number } | null = null;
+
+  /**
+   * Level lines, as in the demo. Over the bar the pointer points at a level;
+   * over the slice, the probe does. With Shift that level is drawn as a line
+   * over the slice, and Shift+click pins it.
+   */
+  private hoverLevel: number | null = null;
+  private shiftDown = false;
+  private pins: number[] = [];
+  private hotPin: number | null = null;
+  private levelsSig = '';
+  private pinsSig = '';
 
   /** Saturation colours as hex, or null for "the end of the ramp". */
   private knots: Knot[] = [];
@@ -263,7 +311,7 @@ export class Colorbar {
     };
 
     this.picker = this.buildPicker();
-    this.setHistOpen(true);
+    this.setHistOpen(true, false);
     this.attach();
   }
 
@@ -368,14 +416,33 @@ export class Colorbar {
     this.pickerWhich = null;
   }
 
+  private getTrackRect(): DOMRect {
+    return (this.trackRect ??= this.track.getBoundingClientRect());
+  }
+
+  private getBarRect(): DOMRect {
+    return (this.barRect ??= this.barCanvas.getBoundingClientRect());
+  }
+
+  private invalidateRects = (): void => {
+    this.trackRect = null;
+    this.barRect = null;
+  };
+
   // ---- data ---------------------------------------------------------------
 
   setVolume(vol: Volume): void {
     this.vol = vol;
+    this.renderSig = '';
     this.dataLo = vol.min;
     this.dataHi = vol.max;
     this.domHold = null;
     this.domAnim = null;
+    // Pinned levels belong to the volume they were read on.
+    this.pins = [];
+    this.hotPin = null;
+    this.hoverLevel = null;
+    this.emitLevels();
     const span = Math.max(vol.max - vol.min, 1e-6);
 
     this.counts.fill(0);
@@ -422,6 +489,73 @@ export class Colorbar {
 
   setProbe(value: number | null): void {
     this.probe = value;
+    this.emitLevels();
+  }
+
+  /**
+   * Move the limits to new values with the same eased slide as a typed value,
+   * for the host's discrete jumps such as the window presets.
+   */
+  animateTo(lo: number, hi: number): void {
+    if (!this.vol) return;
+    this.animLimits(lo, hi);
+  }
+
+  // ---- level lines --------------------------------------------------------
+
+  /** The level being pointed at: over the bar the bar's, else the probe's. */
+  private pointedLevel(): number | null {
+    return this.hoverLevel ?? this.probe;
+  }
+
+  /** Tell the host about the level lines, only when they changed. */
+  private emitLevels(): void {
+    // Over a pinned line the pinned one rules, and the live one steps aside.
+    const level = this.pointedLevel();
+    const live = this.shiftDown && this.hotPin === null && level !== null ? level : null;
+    const hot = this.hotPin ?? -1;
+    const sig = `${live}|${this.pins.join(',')}|${hot}`;
+    if (sig === this.levelsSig) return;
+    this.levelsSig = sig;
+    this.hooks.onLevels(live, [...this.pins], hot);
+  }
+
+  /** Pin a level as a line over the slice and a mark on the bar. */
+  pinLevel(v: number | null): void {
+    if (v === null || !this.vol || !isFinite(v)) return;
+    if (this.pins.length >= MAX_PINS) return;
+    const near = Math.max(this.dataHi - this.dataLo, 1e-6) * 1e-4;
+    if (this.pins.some((p) => Math.abs(p - v) < near)) return;
+    this.pins.push(v);
+    this.pins.sort((a, b) => a - b);
+    this.hotPin = null;
+    this.emitLevels();
+    this.schedule();
+  }
+
+  private removePin(i: number): void {
+    if (i < 0 || i >= this.pins.length) return;
+    this.pins.splice(i, 1);
+    this.hotPin = null;
+    this.emitLevels();
+    this.schedule();
+  }
+
+  /** Highlight a pinned line, here and over the slice. */
+  private setHot(i: number | null): void {
+    if (this.hotPin === i) return;
+    this.hotPin = i;
+    for (const el of Array.from(this.track.querySelectorAll<HTMLElement>('.cb-pin'))) {
+      el.classList.toggle('hot', Number(el.dataset.p) === i);
+    }
+    this.emitLevels();
+    this.placeNeedle();
+  }
+
+  private setShift(on: boolean): void {
+    if (this.shiftDown === on) return;
+    this.shiftDown = on;
+    this.emitLevels();
   }
 
   // ---- the elastic domain -------------------------------------------------
@@ -456,7 +590,9 @@ export class Colorbar {
       if (s >= 1) {
         this.domAnim = null;
       } else {
-        const e = s * s * (3 - 2 * s);
+        // Ease-out, as in the demo: the reframe is the background, so it sets
+        // off at once and settles slowly rather than lagging the gesture.
+        const e = easeOut(s);
         this.dom0 = this.domAnim.d0 + (t0 - this.domAnim.d0) * e;
         this.dom1 = this.domAnim.d1 + (t1 - this.domAnim.d1) * e;
         return;
@@ -476,7 +612,7 @@ export class Colorbar {
    * know which way the cursor is pushing.
    */
   private fracRawFromY(clientY: number): number {
-    const r = this.track.getBoundingClientRect();
+    const r = this.getTrackRect();
     if (r.height < 1) return 0;
     return 1 - (clientY - r.top) / r.height;
   }
@@ -490,7 +626,7 @@ export class Colorbar {
   }
 
   private yOfValue(v: number): number {
-    return (1 - (v - this.dom0) / this.span) * this.track.clientHeight;
+    return (1 - (v - this.dom0) / this.span) * this.trackH;
   }
 
   /** The transfer function: piecewise linear through the knots. */
@@ -522,7 +658,7 @@ export class Colorbar {
 
   private renderKnots(): void {
     for (const el of Array.from(this.track.querySelectorAll('.cb-knot'))) el.remove();
-    const h = this.track.clientHeight;
+    const h = this.trackH;
     this.knots.forEach((k, i) => {
       const y = this.yOfValue(this.lo + k.x * (this.hi - this.lo));
       if (y < -h * 0.02 || y > h * 1.02) return;
@@ -574,7 +710,7 @@ export class Colorbar {
    * the bar and have to count as bar.
    */
   private zoneAt(x: number): 'hist' | 'bar' | 'ticks' {
-    const rb = this.barCanvas.getBoundingClientRect();
+    const rb = this.getBarRect();
     if (x < rb.left - 1) return 'hist';
     if (x > rb.right + 1) return 'ticks';
     return 'bar';
@@ -586,11 +722,40 @@ export class Colorbar {
    */
   private inPanZone(x: number, y: number): boolean {
     if (this.zoneAt(x) !== 'ticks') return false;
-    const r = this.track.getBoundingClientRect();
+    const r = this.getTrackRect();
     const a = r.top + (1 - clamp01(this.fracOf(this.hi))) * r.height;
     const b = r.top + (1 - clamp01(this.fracOf(this.lo))) * r.height;
     const third = (b - a) / 3;
     return y >= a + third && y <= b - third;
+  }
+
+  /**
+   * A limit pins its end of the domain once it is past the data: it is what
+   * sets the size of the bar, and its handle stays on the edge however far the
+   * figure goes.
+   */
+  private isPinned(which: Limit): boolean {
+    const pad = Math.max(this.dataHi - this.dataLo, 1e-6) * DOM_PAD;
+    return which === 'hi' ? this.hi > this.dataHi + pad : this.lo < this.dataLo - pad;
+  }
+
+  /**
+   * The handle a pointer event is on: by its target, or failing that by
+   * distance, since the 16 px grab area is easy to leave between the two
+   * clicks of a double click.
+   */
+  private handleAt(e: MouseEvent): Limit | null {
+    const h = (e.target as HTMLElement).closest('.cb-hnd') as HTMLElement | null;
+    if (h) return h.dataset.w as Limit;
+    if (this.zoneAt(e.clientX) !== 'bar') return null;
+    const top = this.getTrackRect().top;
+    const y = e.clientY - top;
+    const yHi = Math.min(this.trackH, Math.max(0, this.yOfValue(this.hi)));
+    const yLo = Math.min(this.trackH, Math.max(0, this.yOfValue(this.lo)));
+    const dHi = Math.abs(y - yHi);
+    const dLo = Math.abs(y - yLo);
+    if (Math.min(dHi, dLo) > HANDLE_HIT) return null;
+    return dHi <= dLo ? 'hi' : 'lo';
   }
 
   private minWindow(): number {
@@ -643,7 +808,7 @@ export class Colorbar {
       this.hooks.onLimits(this.lo, this.hi);
       return false;
     }
-    const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+    const e = easeInOut(k);
     this.lo = a.lo0 + (a.lo1 - a.lo0) * e;
     this.hi = a.hi0 + (a.hi1 - a.hi0) * e;
     this.hooks.onLimits(this.lo, this.hi);
@@ -659,7 +824,7 @@ export class Colorbar {
       this.autoT = 0;
       return false;
     }
-    const r = this.track.getBoundingClientRect();
+    const r = this.getTrackRect();
     const over = d.lastY < r.top ? r.top - d.lastY : d.lastY > r.bottom ? d.lastY - r.bottom : 0;
     if (over <= 0) {
       this.autoT = 0;
@@ -696,7 +861,8 @@ export class Colorbar {
     this.raf = 0;
     const auto = this.stepAuto(now);
     const lim = this.stepLimAnim(now);
-    const more = auto || lim || this.domAnim !== null;
+    const hist = this.stepHistAnim(now);
+    const more = auto || lim || hist || this.domAnim !== null;
     this.render(now);
     if (more) this.schedule();
   };
@@ -729,7 +895,7 @@ export class Colorbar {
    * number.
    */
   private renderGuides(): void {
-    const h = this.track.clientHeight;
+    const h = this.trackH;
     // The stops depend only on the data, the domain and the track height, and
     // during a drag the domain is frozen by the ratchet, so the signature does
     // not change and the DOM is left alone.
@@ -766,31 +932,83 @@ export class Colorbar {
     }
   }
 
-  private setHistOpen(open: boolean): void {
+  /**
+   * Fold or unfold the histogram. The column width is animated here, frame by
+   * frame with an ease-out, and the histogram is redrawn at each width, as in
+   * the demo: a CSS transition would slide the columns while the canvas sat
+   * drawn at its final size, which is what made it look wrong.
+   */
+  private setHistOpen(open: boolean, animate = true): void {
     this.histOpen = open;
-    this.root.classList.toggle('nohist', !open);
-    this.root.style.setProperty('--cb-hist', open ? `${HIST_W}px` : '0px');
+    const to = open ? HIST_W : 0;
+    if (animate) {
+      // From wherever it is now, so a click mid-animation turns it round.
+      this.histAnim = { from: this.histW, to, start: performance.now() };
+      this.schedule();
+    } else {
+      this.histAnim = null;
+      this.applyHistW(to);
+    }
     // Open, the arrow points at where the panel would roll up to.
     this.histBtn.textContent = open ? '›' : '‹';
     this.histBtn.title = open ? 'recoge el histograma' : 'despliega el histograma';
     this.histBtn.setAttribute('aria-expanded', String(open));
   }
 
+  private applyHistW(w: number): void {
+    this.histW = Math.round(Math.max(0, Math.min(HIST_W, w)));
+    this.root.style.setProperty('--cb-hist', `${this.histW}px`);
+    this.root.classList.toggle('nopct', this.histW < PCT_MIN);
+    this.invalidateRects();
+  }
+
+  /** Advance the fold animation; true while it is still running. */
+  private stepHistAnim(now: number): boolean {
+    const a = this.histAnim;
+    if (!a) return false;
+    const k = Math.min(1, (now - a.start) / HIST_ANIM_MS);
+    this.applyHistW(a.from + (a.to - a.from) * easeOut(k));
+    if (k >= 1) {
+      this.histAnim = null;
+      return false;
+    }
+    return true;
+  }
+
   private attach(): void {
     // The guides follow the key itself, so they appear before the drag starts.
+    // Shift likewise: the live level line comes and goes with the key,
+    // without having to move the mouse.
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Control') this.setCtrl(true);
+      else if (e.key === 'Shift') this.setShift(true);
     });
     window.addEventListener('keyup', (e) => {
       if (e.key === 'Control') this.setCtrl(false);
+      else if (e.key === 'Shift') this.setShift(false);
     });
-    window.addEventListener('blur', () => this.setCtrl(false));
+    window.addEventListener('blur', () => {
+      this.setCtrl(false);
+      this.setShift(false);
+    });
 
+    // The cached rects go stale when anything moves the bar: the window, a
+    // scroll, or the columns sliding as the histogram folds.
+    window.addEventListener('resize', this.invalidateRects);
+    window.addEventListener('scroll', this.invalidateRects, true);
+    this.track.addEventListener('transitionend', this.invalidateRects);
+    // A box left with text that did not change the limits keeps that text,
+    // because the signature has not moved; redraw on leaving it.
+    for (const input of Object.values(this.limitEls)) {
+      input.addEventListener('blur', () => {
+        this.renderSig = '';
+        this.schedule();
+      });
+    }
 
     this.histBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       this.setHistOpen(!this.histOpen);
-      this.render();
     });
 
     this.track.addEventListener('pointerdown', (e) => {
@@ -800,16 +1018,28 @@ export class Colorbar {
       if (target.closest('.cb-lim') || target.closest('.cb-histbtn')) return;
       const handle = target.closest('.cb-hnd') as HTMLElement | null;
       const knotEl = !handle ? (target.closest('.cb-knot') as HTMLElement | null) : null;
+      // Shift+click on the bar pins the level there. Not on a handle or a
+      // knot, where the press is the start of a drag.
+      if (e.shiftKey && !handle && !knotEl && this.zoneAt(e.clientX) === 'bar') {
+        e.preventDefault();
+        this.pinLevel(this.valueAtY(e.clientY));
+        return;
+      }
       const pan = !handle && !knotEl && this.inPanZone(e.clientX, e.clientY);
       // Neither the body of the bar nor the histogram drags anything: the
       // histogram is read-only and panning has its own zone in the ticks.
       if (!handle && !knotEl && !pan) return;
       e.preventDefault();
+      // A handle captures the pointer itself, as in the demo. Captured on the
+      // track, the click and the double click that follow would be aimed at
+      // the track, and a double click on a handle would read as one on the
+      // bar's body and drop a warp knot instead of sending the limit home.
       try {
-        this.track.setPointerCapture(e.pointerId);
+        (handle ?? this.track).setPointerCapture(e.pointerId);
       } catch {
         /* ignore */
       }
+      this.hoverLevel = null;
       const kind: Limit | 'pan' | 'knot' = handle
         ? (handle.dataset.w as Limit)
         : knotEl
@@ -847,6 +1077,14 @@ export class Colorbar {
         const pan = this.inPanZone(e.clientX, e.clientY);
         const cur = pan ? 'grab' : '';
         if (this.ticksEl.style.cursor !== cur) this.ticksEl.style.cursor = cur;
+        // Over the bar the pointer reads a level, as over the slice; with
+        // Shift that level is drawn as a line over the slice.
+        const onBar =
+          this.zoneAt(e.clientX) === 'bar' && !(e.target as HTMLElement).closest('.cb-histbtn');
+        this.hoverLevel = onBar ? this.valueAtY(e.clientY) : null;
+        this.shiftDown = e.shiftKey;
+        this.emitLevels();
+        this.placeNeedle();
         return;
       }
       if (d.pointerId !== e.pointerId || !this.vol) return;
@@ -859,6 +1097,29 @@ export class Colorbar {
         d.lo0 = this.lo;
         d.hi0 = this.hi;
       }
+
+      // Dead zone. With the limit pinned on an edge and the cursor beyond it,
+      // heading back towards the bar does not drag: it only closes the gap,
+      // and the handle catches again once the cursor passes its level. Without
+      // it every step out there put the limit on the edge of the domain, which
+      // the ratchet then opened a little further, so the way back pushed out.
+      if (d.kind === 'lo' || d.kind === 'hi') {
+        const r = this.getTrackRect();
+        const above = e.clientY < r.top;
+        if (above || e.clientY > r.bottom) {
+          const towardBar = above ? e.clientY > d.lastY : e.clientY < d.lastY;
+          if (towardBar && this.isPinned(d.kind)) {
+            d.lastY = e.clientY;
+            // Re-anchor, so the Alt path also picks up from here.
+            d.y0 = e.clientY;
+            d.lo0 = this.lo;
+            d.hi0 = this.hi;
+            this.schedule();
+            return;
+          }
+        }
+      }
+
       d.lastY = e.clientY;
       d.alt = e.altKey;
       const fine = e.altKey ? FINE_GAIN : 1;
@@ -867,7 +1128,7 @@ export class Colorbar {
         const k = this.knots[d.knot ?? -1];
         if (!k || d.knotX0 === undefined) return;
         const span = Math.max(this.hi - this.lo, 1e-9);
-        const perPx = this.span / Math.max(1, this.track.clientHeight);
+        const perPx = this.span / Math.max(1, this.trackH);
         // Dragging moves the knot along the VALUE axis; the grey it carries
         // stays put, which is what deforms the ramp.
         const x = d.knotX0 - ((e.clientY - d.y0) * perPx * fine) / span;
@@ -899,16 +1160,18 @@ export class Colorbar {
       this.setCtrl(e.ctrlKey);
       this.render();
       // Past the end of the bar the limit keeps going on its own.
-      if (d.kind !== 'pan' && (e.clientY < this.track.getBoundingClientRect().top ||
-        e.clientY > this.track.getBoundingClientRect().bottom)) {
+      if (d.kind !== 'pan' && (e.clientY < this.getTrackRect().top ||
+        e.clientY > this.getTrackRect().bottom)) {
         this.schedule();
       }
     });
 
     const end = (e: PointerEvent) => {
       if (!this.drag || this.drag.pointerId !== e.pointerId) return;
+      // Whoever holds the capture, the track or a handle.
+      const holder = e.target as Element;
       try {
-        if (this.track.hasPointerCapture(e.pointerId)) this.track.releasePointerCapture(e.pointerId);
+        if (holder.hasPointerCapture(e.pointerId)) holder.releasePointerCapture(e.pointerId);
       } catch {
         /* ignore */
       }
@@ -916,6 +1179,12 @@ export class Colorbar {
     };
     this.track.addEventListener('pointerup', end);
     this.track.addEventListener('pointercancel', end);
+    this.track.addEventListener('pointerleave', () => {
+      if (this.drag || this.hoverLevel === null) return;
+      this.hoverLevel = null;
+      this.emitLevels();
+      this.placeNeedle();
+    });
     // The net for Alt-Tab mid-gesture: without it the drag stays alive and the
     // auto-advance keeps running with the button already released.
     window.addEventListener('blur', () => this.endDrag());
@@ -960,7 +1229,12 @@ export class Colorbar {
         const target = e.target as HTMLElement;
         // Only over the body of the bar, and over what is drawn on it. Over
         // the ticks and the histogram the wheel scrolls the page as usual.
-        if (target !== this.barCanvas && !target.closest('.cb-hnd')) return;
+        if (
+          target !== this.barCanvas &&
+          !target.closest('.cb-hnd') &&
+          !target.closest('.cb-knot') &&
+          !target.closest('.cb-pin')
+        ) return;
         e.preventDefault();
         e.stopPropagation();
         // Zoom about the value under the cursor, not about the window centre.
@@ -1026,14 +1300,17 @@ export class Colorbar {
       // In the box, a double click selects text.
       if (target.closest('.cb-lim') || target.closest('.cb-histbtn')) return;
       e.stopPropagation();
+      // Two Shift+clicks in a row are two tries at pinning a level, not a
+      // request for anything else.
+      if (e.shiftKey) return;
       this.domHold = null;
       this.domAnim = { d0: this.dom0, d1: this.dom1, start: performance.now() };
-      const handle = target.closest('.cb-hnd') as HTMLElement | null;
-      if (handle) {
-        // Each handle goes to its own end of the scale, expressed as the
-        // percentile stop the Ctrl magnet would give it: p100 and p0.
-        if (handle.dataset.w === 'hi') this.animLimits(this.lo, this.quantile(1));
-        else this.animLimits(this.quantile(0), this.hi);
+      const which = this.handleAt(e);
+      if (which) {
+        // Each handle goes to its own end of the data, exactly: the data
+        // maximum is p100 and the data minimum p0.
+        if (which === 'hi') this.animLimits(this.lo, this.dataHi);
+        else this.animLimits(this.dataLo, this.hi);
       } else if (target.closest('.cb-knot')) {
         // Nothing: a knot is removed with two right clicks, not here.
       } else if (this.zoneAt(e.clientX) === 'bar') {
@@ -1137,55 +1414,80 @@ export class Colorbar {
     this.syncDomain(now);
     const h = this.track.clientHeight;
     if (h < 8) return;
+    this.trackH = h;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.drawBar(h, dpr);
-    if (this.histOpen) this.drawHist(h, dpr);
-    this.drawTicks();
-    this.placeMarkers();
-    this.renderKnots();
+    // Everything but the needle depends only on this. The knot being dragged
+    // is in it because it is drawn highlighted.
+    const sig = [
+      this.lo, this.hi, this.dom0, this.dom1, h, dpr, this.histW, this.under, this.over,
+      this.knots.map((k) => `${k.x},${k.y}`).join(';'),
+      this.drag?.kind === 'knot' ? this.drag.knot : -1,
+    ].join('|');
+    if (sig !== this.renderSig) {
+      this.renderSig = sig;
+      this.drawBar(h, dpr);
+      this.drawHist(h, dpr);
+      this.drawTicks();
+      this.placeMarkers();
+      this.renderKnots();
+    }
+    this.renderPins();
+    this.placeNeedle();
     this.renderGuides();
+  }
+
+  /** Size a canvas's buffer, only when it changed: assigning clears and reallocates it. */
+  private fitCanvas(c: HTMLCanvasElement, w: number, h: number): void {
+    if (c.width !== w) c.width = w;
+    if (c.height !== h) c.height = h;
   }
 
   private drawBar(h: number, dpr: number): void {
     const c = this.barCanvas;
-    c.width = Math.max(1, Math.round(BAR_W * dpr));
-    c.height = Math.max(1, Math.round(h * dpr));
+    this.fitCanvas(c, Math.max(1, Math.round(BAR_W * dpr)), Math.max(1, Math.round(h * dpr)));
     const g = c.getContext('2d');
     if (!g) return;
+    const W = c.width;
     const rows = c.height;
-    const strip = document.createElement('canvas');
-    strip.width = 1;
-    strip.height = rows;
-    const sg = strip.getContext('2d');
-    if (!sg) return;
-    const img = sg.createImageData(1, rows);
+    if (!this.barImg || this.barImg.width !== W || this.barImg.height !== rows) {
+      this.barImg = g.createImageData(W, rows);
+      this.barPx = new Uint32Array(this.barImg.data.buffer);
+    }
+    const px = this.barPx as Uint32Array;
+    // ABGR on a little-endian buffer: one write per pixel instead of four.
+    const pack = (r: number, gr: number, b: number) =>
+      ((255 << 24) | (Math.round(b) << 16) | (Math.round(gr) << 8) | Math.round(r)) >>> 0;
     const win = Math.max(this.hi - this.lo, 1e-9);
     const un = this.under ? hexToRgb(this.under) : null;
     const ov = this.over ? hexToRgb(this.over) : null;
+    const unPx = un ? pack(un[0] * 255, un[1] * 255, un[2] * 255) : 0;
+    const ovPx = ov ? pack(ov[0] * 255, ov[1] * 255, ov[2] * 255) : 0;
     for (let y = 0; y < rows; y++) {
       // Row 0 is the top of the bar, which is the top of the domain.
       const v = this.dom0 + (1 - y / (rows - 1 || 1)) * this.span;
-      const g = this.warp(clamp01((v - this.lo) / win)) * 255;
-      const c = v < this.lo && un ? un : v > this.hi && ov ? ov : null;
-      const o = y * 4;
-      img.data[o] = c ? c[0] * 255 : g;
-      img.data[o + 1] = c ? c[1] * 255 : g;
-      img.data[o + 2] = c ? c[2] * 255 : g;
-      img.data[o + 3] = 255;
+      let p: number;
+      if (v < this.lo && un) p = unPx;
+      else if (v > this.hi && ov) p = ovPx;
+      else {
+        const grey = this.warp(clamp01((v - this.lo) / win)) * 255;
+        p = pack(grey, grey, grey);
+      }
+      // The whole row at once.
+      px.fill(p, y * W, y * W + W);
     }
-    sg.putImageData(img, 0, 0);
-    g.imageSmoothingEnabled = false;
-    g.drawImage(strip, 0, 0, c.width, rows);
-    this.drawCurve(g, c.width, rows, dpr);
+    g.putImageData(this.barImg, 0, 0);
+    this.drawCurve(g, W, rows, dpr);
   }
 
   private drawHist(h: number, dpr: number): void {
     const c = this.histCanvas;
-    c.width = Math.max(1, Math.round(HIST_W * dpr));
-    c.height = Math.max(1, Math.round(h * dpr));
+    // At the column's current width, so it grows and shrinks with the fold.
+    this.fitCanvas(c, Math.max(1, Math.round(this.histW * dpr)), Math.max(1, Math.round(h * dpr)));
     const g = c.getContext('2d');
     if (!g) return;
     g.clearRect(0, 0, c.width, c.height);
+    // Folded, or nearly: there is nowhere to draw it.
+    if (this.histW < 12) return;
     // The bars end flush against the frame of the colour bar, with no gap.
     const pad = Math.max(1, Math.round(dpr));
     const usable = c.width - pad - 2;
@@ -1217,7 +1519,7 @@ export class Colorbar {
    */
   private drawTicks(): void {
     this.ticksEl.textContent = '';
-    const h = this.track.clientHeight;
+    const h = this.trackH;
     const yLo = this.yOfValue(this.lo);
     const yHi = this.yOfValue(this.hi);
     for (const v of niceTicks(this.lo, this.hi, 5)) {
@@ -1237,7 +1539,7 @@ export class Colorbar {
   }
 
   private placeMarkers(): void {
-    const h = this.track.clientHeight;
+    const h = this.trackH;
     // Clamp: while the domain animates a limit can fall briefly outside it. The
     // handle waits at the edge and slides in, rather than leaving the bar.
     const clampY = (y: number) => Math.min(h, Math.max(0, y));
@@ -1259,15 +1561,61 @@ export class Colorbar {
       const dv = which === 'lo' ? this.dataLo : this.dataHi;
       this.dataMarks[which].style.top = `${clampY(this.yOfValue(dv))}px`;
     }
+  }
 
-    if (this.probe === null) {
-      this.needle.style.display = 'none';
-    } else {
-      const f = (this.probe - this.dom0) / this.span;
-      this.needle.style.display = 'block';
-      this.needle.style.top = `${clampY(this.yOfValue(this.probe))}px`;
-      const arrow = f > 1.001 ? '\u25b2 ' : f < -0.001 ? '\u25bc ' : '';
-      this.needleLabel.textContent = arrow + this.fmt(this.probe);
+  /**
+   * The probe needle, the one thing that changes on almost every frame. It is
+   * placed apart from the rest so a pointer move over the slice costs a style
+   * write here and nothing else.
+   */
+  private placeNeedle(): void {
+    // The level being pointed at: on the bar, the bar's; else the probe's. Over
+    // a pinned line it steps aside, since that mark carries its own value.
+    const level = this.pointedLevel();
+    if (level === null || this.hotPin !== null) {
+      if (this.needle.style.display !== 'none') this.needle.style.display = 'none';
+      return;
     }
+    const h = this.trackH;
+    const f = (level - this.dom0) / this.span;
+    const top = `${Math.min(h, Math.max(0, this.yOfValue(level)))}px`;
+    const arrow = f > 1.001 ? '\u25b2 ' : f < -0.001 ? '\u25bc ' : '';
+    const label = arrow + this.fmt(level);
+    if (this.needle.style.display !== 'block') this.needle.style.display = 'block';
+    if (this.needle.style.top !== top) this.needle.style.top = top;
+    if (this.needleLabel.textContent !== label) this.needleLabel.textContent = label;
+  }
+
+  /**
+   * A mark on the right half of the bar for each pinned level, with its value.
+   * Rebuilt only when the levels or the domain move; the highlight is toggled
+   * in place by setHot().
+   */
+  private renderPins(): void {
+    const h = this.trackH;
+    const sig = `${this.pins.join(',')}|${this.dom0}|${this.dom1}|${h}`;
+    if (sig === this.pinsSig) return;
+    this.pinsSig = sig;
+    for (const el of Array.from(this.track.querySelectorAll('.cb-pin'))) el.remove();
+    this.pins.forEach((v, i) => {
+      const y = this.yOfValue(v);
+      if (y < -h * 0.02 || y > h * 1.02) return;
+      const el = document.createElement('div');
+      el.className = `cb-pin${i === this.hotPin ? ' hot' : ''}`;
+      el.dataset.p = String(i);
+      el.style.top = `${Math.min(h, Math.max(0, y))}px`;
+      const label = document.createElement('span');
+      label.textContent = this.fmt(v);
+      el.appendChild(label);
+      el.title = 'linea de nivel fijada, clic derecho para borrarla';
+      el.addEventListener('pointerenter', () => this.setHot(i));
+      el.addEventListener('pointerleave', () => this.setHot(null));
+      el.addEventListener('contextmenu', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this.removePin(i);
+      });
+      this.track.appendChild(el);
+    });
   }
 }

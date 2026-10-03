@@ -155,6 +155,15 @@ export class Scene {
   warpKnots: { x: number; y: number }[] = [];
 
   /**
+   * Level lines drawn over the slice, in data units: the live one that follows
+   * the pointer while Shift is held, the pinned ones, and which pinned one is
+   * highlighted (-1 for none).
+   */
+  isoLive: number | null = null;
+  isoPins: number[] = [];
+  isoHot = -1;
+
+  /**
    * Within this angle of a grid axis the normal goes exactly onto it. Outside
    * the snap it stays continuous.
    */
@@ -169,8 +178,10 @@ export class Scene {
 
   setVolume(vol: Volume): void {
     this.vol = vol;
-    this.windowWidth = Math.max(vol.hi - vol.lo, 1e-3);
-    this.windowLevel = (vol.hi + vol.lo) / 2;
+    // The whole range of the data, as in the demo: the limits start on p0 and
+    // p100, and the robust window is one click away on the Auto preset.
+    this.windowWidth = Math.max(vol.max - vol.min, 1e-3);
+    this.windowLevel = (vol.max + vol.min) / 2;
     this.slabMm = 0;
     this.resetCamera();
     this.volumeCentre(this.pivot);

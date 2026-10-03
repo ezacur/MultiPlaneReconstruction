@@ -82,21 +82,18 @@ button.active { border-color: var(--accent); color: #fff; background: #2c3a5c; }
 /* The track is exactly as wide as its three columns, so the saturation labels
    can be anchored by their right edge against the bar. */
 .cb-track { position: relative; height: 260px; touch-action: none; cursor: crosshair;
-  width: calc(var(--cb-hist) + var(--cb-bar) + var(--cb-ticks));
-  transition: width .18s ease; }
+  width: calc(var(--cb-hist) + var(--cb-bar) + var(--cb-ticks)); }
 
 /* A canvas is a replaced element: without an explicit pixel height it falls
    back to its intrinsic size and the bar collapses. The JS stamps width and
    height in device pixels; these rules fix the CSS box. */
 .cb-hist { position: absolute; left: 0; top: 0; height: 100%; width: var(--cb-hist);
-  display: block; pointer-events: none; transition: width .18s ease; }
-.cb.nohist .cb-hist { display: none; }
+  display: block; pointer-events: none; }
 /* The frame goes in box-shadow, not border: with border-box a border eats 2 px
    of height and shifts the ramp by one, and then the histogram, the handles and
    the marks stop lining up with it. */
 .cb-bar { position: absolute; left: var(--cb-hist); top: 0; height: 100%; width: var(--cb-bar);
-  display: block; cursor: crosshair; box-shadow: 0 0 0 1px var(--cb-line-strong);
-  transition: left .18s ease; }
+  display: block; cursor: crosshair; box-shadow: 0 0 0 1px var(--cb-line-strong); }
 .cb-track.panning, .cb-track.panning * { cursor: grabbing !important; }
 .cb-track.dragging, .cb-track.dragging * { cursor: ns-resize !important; }
 
@@ -104,15 +101,14 @@ button.active { border-color: var(--accent); color: #fff; background: #2c3a5c; }
   height: 11px; z-index: 9; display: flex; align-items: center; justify-content: center;
   padding: 0; flex: none; font-family: ui-monospace, Consolas, monospace; font-size: 8px;
   line-height: 1; color: var(--cb-ink-2); background: var(--cb-surface);
-  border: 1px solid var(--cb-line-strong); border-radius: 0 0 0 2px; cursor: pointer;
-  transition: left .18s ease; }
+  border: 1px solid var(--cb-line-strong); border-radius: 0 0 0 2px; cursor: pointer; }
 .cb-histbtn:hover { color: var(--cb-live); border-color: var(--cb-live);
   background: var(--cb-surface); }
 
 /* The axis lives INSIDE the window: past the limits there are no ticks, and the
    first and last of the scale are the limit boxes themselves. */
 .cb-ticks { position: absolute; left: calc(var(--cb-hist) + var(--cb-bar) + 4px); top: 0;
-  bottom: 0; right: 0; pointer-events: none; transition: left .18s ease; }
+  bottom: 0; right: 0; pointer-events: none; }
 .cb-tick { position: absolute; left: 0; transform: translateY(-50%); display: flex;
   align-items: center; gap: 4px; font-family: ui-monospace, Consolas, monospace;
   font-size: 10.5px; color: var(--cb-ink-3); white-space: nowrap; }
@@ -122,7 +118,7 @@ button.active { border-color: var(--accent); color: #fff; background: #2c3a5c; }
    in the strong ink, against the 10.5 px in --cb-ink-3 of the others. */
 .cb-lim { position: absolute; left: calc(var(--cb-hist) + var(--cb-bar) + 4px);
   transform: translateY(-50%); display: flex; align-items: center; gap: 4px;
-  z-index: 8; transition: left .18s ease; }
+  z-index: 8; }
 .cb-lim i { display: block; width: 6px; height: 2px; background: var(--cb-ink-2); flex: none; }
 .cb-lim-in { width: 54px; font-family: ui-monospace, Consolas, monospace; font-size: 12px;
   font-weight: 600; text-align: left; color: var(--cb-ink); background: transparent;
@@ -141,20 +137,19 @@ button.active { border-color: var(--accent); color: #fff; background: #2c3a5c; }
   background: var(--cb-surface); border-radius: 2px; pointer-events: none; z-index: 6; }
 .cb-pct::after { content: ""; position: absolute; right: 1px; top: calc(50% - 1px);
   width: 7px; height: 2px; background: var(--cb-live); }
-.cb.nohist .cb-pct { display: none; }
+.cb.nopct .cb-pct { display: none; }
 
 /* Range of the data: two fixed marks on the left edge of the bar. The stretch
    between them is where there is data; the rest is domain margin or a limit
    pulled out. In ink, not orange: they belong to the data, not to the limits. */
 .cb-dmark { position: absolute; left: calc(var(--cb-hist) - 6px); width: 6px; height: 1px;
-  background: var(--cb-ink-2); transform: translateY(-50%); pointer-events: none; z-index: 5;
-  transition: left .18s ease; }
+  background: var(--cb-ink-2); transform: translateY(-50%); pointer-events: none; z-index: 5; }
 
 /* The handle is only the line: no little square covering the ramp. The feedback
    is the line itself, which thickens and turns orange. The grab area stays
    16 px tall. */
 .cb-hnd { position: absolute; left: var(--cb-hist); width: var(--cb-bar); height: 16px;
-  transform: translateY(-50%); cursor: ns-resize; z-index: 5; transition: left .18s ease; }
+  transform: translateY(-50%); cursor: ns-resize; z-index: 5; }
 .cb-hnd::before { content: ""; position: absolute; left: -4px; right: -4px; top: 7px;
   height: 2px; background: var(--cb-hl); box-shadow: 0 0 0 1px rgba(0,0,0,.75); }
 .cb-hnd:hover::before, .cb-hnd.act::before { height: 4px; top: 6px; background: var(--cb-live);
@@ -166,18 +161,17 @@ button.active { border-color: var(--accent); color: #fff; background: #2c3a5c; }
 .cb-gtick { position: absolute; left: 0; width: var(--cb-hist); padding: 0 9px 0 2px;
   text-align: right; transform: translateY(-50%); font-family: ui-monospace, Consolas, monospace;
   font-size: 9.5px; color: var(--cb-live); white-space: nowrap;
-  font-variant-numeric: tabular-nums; pointer-events: none; z-index: 5;
-  transition: width .18s ease; }
+  font-variant-numeric: tabular-nums; pointer-events: none; z-index: 5; }
 .cb-gtick:not(:empty) { background: linear-gradient(to right, transparent 0,
   var(--cb-surface) 6px, var(--cb-surface) calc(100% - 9px), transparent 100%); }
 .cb-gtick::after { content: ""; position: absolute; right: 1px; top: calc(50% - 0.5px);
   width: 7px; height: 1px; background: var(--cb-live); }
-.cb.nohist .cb-gtick { display: none; }
+.cb.nopct .cb-gtick { display: none; }
 
 .cb-needle { position: absolute; left: calc(var(--cb-hist) - 6px);
   width: calc(var(--cb-bar) + 12px); height: 0; border-top: 1px solid var(--cb-hl);
   filter: drop-shadow(0 0 1.2px rgba(0,0,0,.9)); pointer-events: none; z-index: 7;
-  display: none; transition: left .18s ease; }
+  display: none; }
 .cb-needle span { position: absolute; left: calc(100% + 5px); top: -9px;
   font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; color: var(--cb-ink);
   background: var(--cb-surface); border: 1px solid var(--cb-line-strong); border-radius: 2px;
@@ -194,6 +188,22 @@ button.active { border-color: var(--accent); color: #fff; background: #2c3a5c; }
   margin-left: -3.5px; background: var(--cb-hl); border: 1px solid rgba(0,0,0,.75);
   border-radius: 50%; box-shadow: 0 1px 2px rgba(0,0,0,.4); }
 .cb-knot:hover::after, .cb-knot.act::after { background: #A6CDEE; border-color: var(--cb-hl); }
+
+/* A pinned level line: a tick across the RIGHT HALF of the bar, like a value
+   mark but stronger, with its figure beside it. Highlighted, in orange, it is
+   the same line drawn orange over the slice. */
+.cb-pin { position: absolute; left: calc(var(--cb-hist) + var(--cb-bar) / 2);
+  width: calc(var(--cb-bar) / 2); height: 11px; transform: translateY(-50%); z-index: 3;
+  cursor: pointer; }
+.cb-pin::before { content: ""; position: absolute; left: 0; right: 0; top: 5px; height: 2px;
+  background: var(--cb-hl); box-shadow: 0 0 0 1px rgba(0,0,0,.75); }
+.cb-pin span { position: absolute; left: calc(100% + 11px); top: -4px;
+  font-family: ui-monospace, Consolas, monospace; font-size: 10px; color: var(--cb-ink-2);
+  background: var(--cb-surface); border: 1px solid var(--cb-line); border-radius: 2px;
+  padding: 0 3px; white-space: nowrap; pointer-events: none; }
+.cb-pin.hot::before { background: var(--cb-live); height: 4px; top: 3px;
+  box-shadow: 0 0 0 1px var(--cb-hl); }
+.cb-pin.hot span { color: var(--cb-live); border-color: var(--cb-live); font-weight: 600; }
 
 /* Saturation colour dialog, anchored to the pointer. */
 .cb-pick { position: fixed; z-index: 50; background: #131A1E; border: 1px solid #3A4A55;

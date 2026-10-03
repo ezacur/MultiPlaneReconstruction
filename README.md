@@ -6,14 +6,71 @@ resliceada encima y se manipula directamente en el espacio: arranca sobre el
 plano de adquisicion, se puede llevar a cualquiera de los planos cartesianos, y
 se puede girar a un plano oblicuo arbitrario arrastrandolo.
 
-## Arranque
+## Como ejecutarlo
+
+### Requisitos
+
+- **Node.js 20.19 o posterior** (o 22.12 o posterior), con `npm`. Es lo que
+  pide Vite 8. Se comprueba con `node -v`.
+- Un **navegador con WebGL2**: Chrome, Edge o Firefox recientes. Hace falta la
+  aceleracion por hardware activada.
+
+No hace falta instalar nada mas: los volumenes de ejemplo vienen en el repo.
+
+### En desarrollo
+
+Desde la carpeta del proyecto:
 
 ```
 npm install
 npm run dev
 ```
 
-Abre la URL que imprime Vite. Arranca con un volumen de ejemplo ya cargado.
+`npm install` solo hace falta la primera vez, o cuando cambie
+`package.json`. `npm run dev` arranca el servidor de Vite y escribe su URL,
+normalmente `http://localhost:5173/`. Abrela en el navegador: la app arranca
+con el TC de craneo de ejemplo ya cargado. Cada cambio en `src/` se recarga solo
+en la pagina abierta. Para parar el servidor, `Ctrl+C` en la terminal.
+
+Si el puerto 5173 esta ocupado, Vite toma el siguiente libre y lo dice en la
+terminal; para fijar uno, `npm run dev -- --port 5180`.
+
+### Version de produccion
+
+```
+npm run build
+npm run preview
+```
+
+`npm run build` comprueba los tipos con TypeScript y deja la app compilada en
+`dist/`. `npm run preview` sirve esa carpeta en `http://localhost:4173/` para
+probarla tal cual se desplegaria. `dist/` es estatica: vale cualquier servidor
+web, pero **no** funciona abriendo `dist/index.html` con doble clic, porque el
+navegador no deja descargar los volumenes desde `file://`.
+
+### Tus propios volumenes
+
+Con la app abierta, el selector **Abrir .nii / .nii.gz** del panel, o
+arrastrar el fichero sobre la vista. Acepta NIfTI-1 sin comprimir o con gzip;
+de un fichero 4D se carga el primer volumen.
+
+Para ver dimensiones, espaciado y affine de un fichero sin abrir la app:
+
+```
+node tools/niftiinfo.mjs ruta/al/fichero.nii.gz
+```
+
+`tools/quantise-lab.html` es autonomo: se abre directamente en el navegador,
+sin servidor ni build.
+
+### Si algo falla
+
+| Sintoma | Causa probable |
+| --- | --- |
+| "Este navegador no soporta WebGL2" | Aceleracion por hardware desactivada, o navegador antiguo |
+| "No se pudo subir el volumen a la GPU" | El volumen supera el tamano maximo de textura 3D de la GPU; el que estaba cargado sigue en pantalla |
+| `npm run dev` se queja de la version de Node | Node anterior a 20.19; actualizalo |
+| La pagina se queda en blanco tras `npm run build` | Se ha abierto `dist/index.html` desde el disco; usa `npm run preview` |
 
 ## El plano
 
@@ -97,7 +154,7 @@ pedida, y el salto que pega el plano en cada cambio de direccion.
 
 Portado de `draggablePlaneWidget.m` del repositorio `volumetric-visualization`.
 El plano lleva un **anillo** concentrico, una banda traslucida sin bordes que va
-de 0.95 a 1.0 del radio del manipulador. La zona de agarre coincide exactamente
+de 0.85 a 1.0 del radio del manipulador. La zona de agarre coincide exactamente
 con lo que se ve. Hay dos gestos:
 
 - **inclinar**: arrastrar el anillo con el boton izquierdo. Gira el plano sobre
@@ -139,6 +196,28 @@ Los dos gestos son absolutos: el angulo y el desplazamiento se recalculan desde
 la terna capturada al empezar el arrastre, por lo que no derivan. `Esc`
 restaura ese estado.
 
+El anillo y la imagen estan en el mismo plano y se solapan, asi que quien
+queda delante se decide a proposito, con un desplazamiento de profundidad: en
+reposo gana la imagen, y en cuanto el anillo se resalta bajo el raton o se
+esta arrastrando, pasa por delante. Sin eso los dos empatan en profundidad y la
+interseccion parpadea al girar.
+
+### Donde coger el anillo para llegar a una cartesiana
+
+Sobre el anillo hay unos tramos tenues, del color del plano al que llevan
+(rojo I, verde J, azul K): agarrandolo dentro de uno, el giro puede caer en ese
+plano de la rejilla. Cada eje sale dos veces, en lados opuestos, porque cada
+lado inclina hacia el mismo plano en un sentido distinto, y el eje sobre el que
+ya esta el plano no sale. El ancho es la ventana real con el snap: agarrando el
+anillo en el angulo p del plano se gira sobre el eje a(p) = sin p u - cos p v,
+y un eje de la rejilla g se alcanza cuando L |sin(p - p0)| < sin(snap), con L y
+p0 la longitud y el angulo de la proyeccion de g sobre el plano. Se recalculan
+en cada frame, asi que siguen al giro mientras se arrastra.
+
+Durante el giro, una **esfera hueca** sobre el arco marca cada angulo en el que
+el plano cae sobre una cartesiana, en el color que tomara el borde. Esta
+dimensionada para que la bolita del arrastre quepa dentro al engancharse.
+
 ## El color del borde
 
 El borde de la imagen toma el color de las coordenadas de la normal: la
@@ -166,6 +245,10 @@ izquierda, un histograma del volumen, de solo lectura, dice donde esta el dato
 de verdad, para poder colocar la ventana sobre el tejido en vez de adivinarla
 con dos numeros.
 
+Al cargar un volumen la ventana abarca todo el rango del dato, del percentil 0
+al 100, como en el demo. El boton **Auto** del panel la lleva al rango robusto,
+de los percentiles 0.5 a 99.5, que recorta los pocos voxeles extremos.
+
 Tres detalles del demo son los que hacen que se lea de un vistazo:
 
 - el **histograma se colorea por la ventana**: lo que entra va en tinta viva, lo
@@ -189,13 +272,18 @@ su forma.
 | Arrastrar una linea de limite | La mueve, en absoluto: va donde esta el cursor |
 | Sacarla por un extremo | Sigue avanzando sola, cada vez mas rapido |
 | Alt mientras se arrastra | Ajuste fino, al 15 por ciento de la ganancia |
-| Arrastrar el cuerpo de la barra | Desplaza los dos limites, ancho intacto |
-| Rueda | Ensancha y estrecha la ventana sobre su centro |
-| Doble clic en un tirador | Lo manda al percentil 100 o al 0, segun el lado |
+| Arrastrar el tercio central de las cifras, entre los dos limites | Desplaza los dos limites, ancho intacto |
+| Rueda sobre la barra | Ensancha y estrecha la ventana alrededor del valor bajo el cursor |
+| Doble clic en un tirador | Lo manda al maximo o al minimo del dato (percentil 100 o 0) |
 | Ctrl | Saca las guias de percentiles y el iman se pega a ellas |
 | Clic derecho en una cola saturada | Elige el color de esa saturacion |
 | Escribir en la caja de un limite | Lo fija a ese valor |
-| Boton de la esquina | Pliega y despliega el histograma |
+| Boton de la esquina | Pliega y despliega el histograma, con animacion |
+| Pasar por la barra | La aguja marca el valor de ese nivel |
+| Shift, sobre la barra o el corte | Dibuja sobre el corte la linea de nivel de ese valor |
+| Shift + clic | La deja fijada, con su marca en la barra |
+| Pasar por la marca de una fijada | La resalta en naranja, en la barra y en el corte |
+| Clic derecho en esa marca | La borra |
 
 Las cajas de los limites son editables: son el primer y el ultimo tick de la
 escala, en el mismo sitio y con la misma rayita que los demas, pero se puede
@@ -235,11 +323,34 @@ Dos ideas del demo son las que la hacen usable:
   por segundo, con techo en 2^6. Medido: a 15 por ciento el rango se multiplica
   por 2.00 en un segundo, y a 30 por ciento por 4.29 en 1.05 segundos, que es
   4^1.05. Volviendo hacia dentro se encoge igual de rapido, porque cada paso
-  re-ancla el arrastre al cursor.
+  re-ancla el arrastre al cursor. Con el limite ya clavado en el borde, acercar
+  el raton a la barra desde fuera no lo arrastra: solo cierra el hueco, y el
+  tirador se vuelve a enganchar cuando el cursor pasa por su altura.
+
+El cuerpo de la barra no arrastra nada: el desplazamiento de los dos limites
+vive en el tercio central de la columna de las cifras, donde el cursor se
+vuelve una mano, para dejar libre junto a cada limite su caja editable.
 
 Junto a cada limite van su valor y el porcentaje de voxeles que satura por ese
 lado. La aguja naranja marca el valor de la sonda, es decir el punto del corte
 bajo el raton, de modo que se ve en la rampa donde cae lo que se esta mirando.
+
+### Lineas de nivel
+
+Como en el demo, el raton siempre senala un nivel: sobre la barra, el de esa
+altura; sobre el corte, el valor bajo el cursor. La aguja lo marca en la barra.
+Con **Shift** pulsado, ese nivel se dibuja ademas como una linea de nivel sobre
+la imagen, y **Shift + clic**, en la barra o en el corte, la deja fijada. Caben
+ocho fijadas. Cada una lleva una marca en la mitad derecha de la barra con su
+valor; pasar por ella la resalta en naranja tambien sobre la imagen, y el clic
+derecho la borra. Las fijadas son del volumen en que se leyeron: al cargar otro
+se van.
+
+Las lineas las pinta el shader del corte, sobre el valor ya proyectado, asi que
+siguen al slab. La distancia al nivel se mide en pixeles dividiendo por la
+derivada en pantalla del valor (`fwidth`), lo que les da el mismo grosor por
+empinado que sea el campo. Donde el pixel toca el borde del volumen esa
+derivada es el salto al exterior y no el del dato, y ahi no se dibujan.
 
 ### Deformar la rampa
 
@@ -259,11 +370,11 @@ funcion a trozos, asi que la imagen cambia con ella. Medido sobre el TC de
 ejemplo, el brillo medio del corte pasa de 46.8 con la rampa lineal a 68.6 con
 dos nodos que empujan los grises medios hacia el extremo claro.
 
-Del demo quedan fuera, a proposito, las piezas que dependen de cosas que esta
-app no tiene: las isolineas fijadas con sus marcas emparejadas, el dialogo de
-niveles discretos, el conmutador de ganancia exponencial del arrastre y la linea
-de pistas contextuales. No hay campo escalar 2D con contornos; el resto si
-esta.
+Del demo quedan fuera, a proposito, el dialogo de niveles discretos, el
+conmutador de ganancia exponencial del arrastre y la linea de pistas
+contextuales; el resto si esta. Los saltos discretos de los limites, como un
+valor tecleado, el doble clic en un tirador o los presets de ventana del panel,
+se deslizan con el mismo easing que en el demo.
 
 ## Controles
 
@@ -275,6 +386,7 @@ esta.
 | Deslizar el plano por su normal | Arrastrar desde la imagen del corte |
 | Orbitar la camara | Arrastrar fuera del plano |
 | Cambiar de corte | Rueda sobre el plano (Shift avanza de 5 en 5) |
+| Fijar la linea de nivel del valor bajo el cursor | Shift + clic sobre la imagen |
 | Acercar la camara | Rueda fuera del plano |
 | Ir a un plano cartesiano | Doble clic en una cara de la caja del volumen |
 | Ventana / nivel | Ctrl + arrastrar, o boton central fuera del plano |

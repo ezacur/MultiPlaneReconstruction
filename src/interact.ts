@@ -22,6 +22,8 @@ export interface InteractionHooks {
   onResetCamera(): void;
   /** Swing the plane across to one of the cartesian planes. */
   onPlane(space: PlaneSpace, axis: number): void;
+  /** Pin the level under the pointer as a level line. */
+  onPinLevel(): void;
 }
 
 /** The plane keys animate across rather than snapping. */
@@ -90,6 +92,14 @@ export function attachInteraction(
     const onPlane = ray !== null && widget.overPlane(ray) !== null;
     const slideButton = e.button === 0 || e.button === 1 || e.button === 2;
 
+    // Shift+click on the image pins the level under the pointer, as on the
+    // bar. It is a click, not the start of a drag.
+    if (e.shiftKey && e.button === 0 && onPlane && !onRing) {
+      probeAt(e);
+      hooks.onPinLevel();
+      return;
+    }
+
     let mode: Mode;
     if (e.ctrlKey || e.metaKey) {
       mode = 'wl';
@@ -153,7 +163,10 @@ export function attachInteraction(
     (e) => {
       if (!scene.vol) return;
       e.preventDefault();
-      const dir = Math.sign(e.deltaY) || 1;
+      // Shift turns the wheel horizontal in some browsers, so deltaY is 0 then.
+      const delta = e.deltaY || e.deltaX;
+      if (!delta) return;
+      const dir = Math.sign(delta);
       const ray = rayAt(e);
       // Over the plane the wheel belongs to the plane; off it, to the camera.
       if (ray && widget.overPlane(ray)) {
@@ -212,6 +225,9 @@ export function attachInteraction(
       }
       return;
     }
+
+    // Leave Ctrl+C, Ctrl+F and the like to the browser.
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
 
     const key = e.key.toLowerCase();
     const plane = PLANE_KEYS[key];

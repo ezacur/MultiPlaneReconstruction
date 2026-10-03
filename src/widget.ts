@@ -1,10 +1,10 @@
 import { vec3 } from 'gl-matrix';
 import { RIBBON_STRIDE } from './renderer';
-import { closestPointOnLine, type Ray, type Scene } from './scene';
+import { closestPointOnLine, directionColor, type Ray, type Scene } from './scene';
 
 /**
  * The 3D plane manipulator: a band lying in the plane, concentric with it,
- * spanning from 0.95 to 1.0 of the widget radius.
+ * spanning from 0.85 to 1.0 of the widget radius.
  *
  * The band is the handle for tilting; sliding can be grabbed anywhere the plane
  * actually shows something, which is the image or the band itself. The gesture
@@ -43,19 +43,34 @@ export interface LineBatch {
   /** Draw as a screen-space ribbon; verts are packed at RIBBON_STRIDE floats. */
   ribbon?: boolean;
   depth?: DepthMode;
+  /**
+   * Shift the batch in depth by this many polygon-offset steps: negative pulls
+   * it towards the camera, positive pushes it away. It settles who wins with
+   * the slice a batch lies flat on, instead of a pixel-by-pixel fight.
+   */
+  nudge?: number;
 }
 
 /** How far round the arc a single grab can tilt the plane. */
 const ARC_MIN = -Math.PI / 2;
 const ARC_MAX = Math.PI / 2;
 /** The grab band, as fractions of the widget radius. */
-const RING_INNER = 0.95;
+const RING_INNER = 0.85;
+/** Depth offset of the band against the slice it lies on, see LineBatch.nudge. */
+const RING_NUDGE_REST = 2;
+const RING_NUDGE_ENGAGED = -1;
 const RING_OUTER = 1.0;
 
 const RING: [number, number, number] = [0.85, 0.87, 0.92];
 const RAIL: [number, number, number] = [0.55, 0.58, 0.66];
 const BEAD: [number, number, number] = [1, 1, 1];
 const BEAD_RIM: [number, number, number] = [0.1, 0.11, 0.14];
+/** The hollow marker on the arc where the plane lands on a grid plane. */
+const STOP_R_IN = 0.026;
+const STOP_R_OUT = 0.036;
+/** The grab windows on the band are kept at least this wide, so they still
+ *  show with the snap set very small. */
+const WINDOW_MIN_HALF = (0.6 * Math.PI) / 180;
 
 /** Depth cue for the guide curves: near is thick and solid, far is thin and faint. */
 const NEAR_WIDTH = 5.4;
@@ -118,6 +133,32 @@ function disc(
     const p = vec3.scaleAndAdd(vec3.create(), centre, e1, Math.cos(a) * radius);
     vec3.scaleAndAdd(p, p, e2, Math.sin(a) * radius);
     out.push(p[0], p[1], p[2]);
+  }
+}
+
+/** A stretch of the band from angle a0 to a1, as a triangle strip. */
+function arcBand(
+  out: number[],
+  centre: vec3,
+  e1: vec3,
+  e2: vec3,
+  rIn: number,
+  rOut: number,
+  a0: number,
+  a1: number,
+): void {
+  const n = Math.max(2, Math.ceil(((a1 - a0) / (Math.PI * 2)) * SEGMENTS));
+  for (let i = 0; i <= n; i++) {
+    const a = a0 + ((a1 - a0) * i) / n;
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    for (const r of [rIn, rOut]) {
+      out.push(
+        centre[0] + (e1[0] * c + e2[0] * s) * r,
+        centre[1] + (e1[1] * c + e2[1] * s) * r,
+        centre[2] + (e1[2] * c + e2[2] * s) * r,
+      );
+    }
   }
 }
 
@@ -340,6 +381,71 @@ export class PlaneWidget {
     return vec3.scaleAndAdd(out, out, d.arcY, Math.sin(angle) * d.radius);
   }
 
+  /**
+   * The angles along the arc at which the plane lands on one of the grid's
+   * cartesian planes, each with the grid axis it lands on.
+   *
+   * Turning about `axis` sweeps the normal round the great circle
+   * n(t) = cos t n0 + sin t (axis x n0), since n0 is perpendicular to the axis.
+   * Against a grid axis a that is A cos t + B sin t, closest at atan2(B, A),
+   * where it is sqrt(A^2 + B^2) off. The stop counts when that is inside the
+   * snap, which is what will pull the normal exactly onto a; the other sign of
+   * a is the same plane half a turn away, so t is folded into the arc's range.
+   */
+  private cartesianStops(d: RotateDrag): { angle: number; axis: vec3 }[] {
+    const s = this.scene;
+    const axes = s.gridAxes();
+    if (!axes) return [];
+    const n0 = d.frame0.n;
+    const w = vec3.cross(vec3.create(), d.axis, n0);
+    // With the snap off only an exact hit lands, which a drag never makes,
+    // but an arc that runs through an axis still shows it.
+    const tol = Math.max(s.cartesianSnapDeg, 1e-3);
+    const minCos = Math.cos((tol * Math.PI) / 180);
+    const out: { angle: number; axis: vec3 }[] = [];
+    for (const a of axes) {
+      const A = vec3.dot(a, n0);
+      const B = vec3.dot(a, w);
+      if (Math.hypot(A, B) <= minCos) continue;
+      let t = Math.atan2(B, A);
+      if (t > ARC_MAX) t -= Math.PI;
+      else if (t <= ARC_MIN) t += Math.PI;
+      if (t >= ARC_MIN && t <= ARC_MAX) out.push({ angle: t, axis: a });
+    }
+    return out;
+  }
+
+  /**
+   * Where on the band a tilt can start that will land on a grid plane, as
+   * windows of angle in the plane's (u, v) axes, each with its grid axis.
+   *
+   * Grabbing the band at angle p tilts about the in-plane axis
+   * a(p) = sin p u - cos p v, which sweeps the normal round the circle
+   * perpendicular to a(p). A grid axis g lies within the snap of that circle
+   * when |g . a(p)| = L |sin(p - p0)| < sin(snap), where L and p0 are the
+   * length and angle of g's projection onto the plane. So the window is
+   * centred where that projection points, and on the opposite side, which
+   * tilts the other way to the same plane. An axis the plane is already on
+   * gets none: every tilt starts from it.
+   */
+  private grabWindows(): { centre: number; half: number; axis: vec3 }[] {
+    const s = this.scene;
+    const axes = s.gridAxes();
+    if (!axes) return [];
+    const sinTol = Math.sin((Math.max(s.cartesianSnapDeg, 1e-3) * Math.PI) / 180);
+    const out: { centre: number; half: number; axis: vec3 }[] = [];
+    for (const g of axes) {
+      const gu = vec3.dot(g, s.u);
+      const gv = vec3.dot(g, s.v);
+      const L = Math.hypot(gu, gv);
+      if (L <= sinTol) continue;
+      const half = Math.max(WINDOW_MIN_HALF, Math.asin(sinTol / L));
+      const p0 = Math.atan2(gv, gu);
+      out.push({ centre: p0, half, axis: g }, { centre: p0 + Math.PI, half, axis: g });
+    }
+    return out;
+  }
+
   /** The angle whose arc point lies nearest the pointer ray. */
   private closestAngleOnArc(d: RotateDrag, ray: Ray): number {
     const distTo = (angle: number): number => {
@@ -399,10 +505,37 @@ export class PlaneWidget {
       strip: true,
       // Writing depth is what lets the band occlude the guide curve behind it.
       depth: 'write',
+      // It lies in the plane of the slice, and where the two overlap their
+      // depths are equal up to rounding, which flickers as the plane turns.
+      // So the tie is settled on purpose: at rest the image wins, and once
+      // the band is offered or held it comes forward over the image.
+      nudge: engaged ? RING_NUDGE_ENGAGED : RING_NUDGE_REST,
     });
 
     const d = this.drag;
     const forward = s.cameraBasis().forward;
+
+    // Faint stretches of the band, in the colour of the plane they lead to,
+    // where grabbing it starts a tilt that can land on a grid plane. They are
+    // worked out from the plane as it is now, so during a drag they follow
+    // the turn frame by frame.
+    {
+      for (const w of this.grabWindows()) {
+        const fill: number[] = [];
+        arcBand(fill, centre, s.u, s.v, R * RING_INNER, R * RING_OUTER, w.centre - w.half, w.centre + w.half);
+        out.push({
+          verts: fill,
+          color: directionColor(w.axis),
+          width: 1,
+          alpha: engaged ? 0.5 : 0.28,
+          strip: true,
+          // One step nearer than the band, so they sit on it, and on the same
+          // side of the image as it: under the image at rest, over it engaged.
+          depth: 'test',
+          nudge: (engaged ? RING_NUDGE_ENGAGED : RING_NUDGE_REST) - 1,
+        });
+      }
+    }
 
     if (d && d.kind === 'rotate') {
       // The path the grabbed point of the ring will travel.
@@ -415,6 +548,21 @@ export class PlaneWidget {
         prev = next;
       }
       out.push(...depthRibbon(segs, forward, RING));
+
+      // A hollow sphere on the arc wherever the turn lands on a grid plane, in
+      // the colour the plane's border will take there. It is sized so the bead
+      // sits inside it when the plane snaps on.
+      const cam = s.cameraBasis();
+      for (const stop of this.cartesianStops(d)) {
+        const p = this.arcPoint(d, stop.angle);
+        const shell: number[] = [];
+        band(shell, p, cam.right, cam.up, R * STOP_R_IN, R * STOP_R_OUT);
+        out.push({ verts: shell, color: directionColor(stop.axis), width: 1, strip: true, depth: 'test' });
+        const rim: number[] = [];
+        circle(rim, p, cam.right, cam.up, R * STOP_R_OUT, 48);
+        circle(rim, p, cam.right, cam.up, R * STOP_R_IN, 48);
+        out.push({ verts: rim, color: BEAD_RIM, width: 1, depth: 'test' });
+      }
     } else if (d && d.kind === 'translate') {
       // The rail is the normal line through the grabbed point, which is fixed
       // in space: it is anchored to the offset the drag started from, not to
