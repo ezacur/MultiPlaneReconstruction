@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Laboratorio de normales cuantizadas</title>
+<style>
+  :root {
+    --bg: #0B1013; --surface: #131A1E; --surface-2: #182126;
+    --line: #25313A; --line-strong: #3A4A55;
+    --ink: #E4ECF0; --ink-2: #A3B1BA; --ink-3: #84949C;
+    --acc: #7EB6E6; --live: #E5A65A; --ok: #5CC79B;
+    --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+    --sans: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.5 var(--sans); }
+  .page { max-width: 1180px; margin: 0 auto; padding: 20px 18px 48px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--ink-3); margin: 0 0 20px; max-width: 70ch; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+       color: var(--ink-3); margin: 0 0 8px; }
+
+  .grid { display: grid; grid-template-columns: 1fr 320px; gap: 16px; align-items: start; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 3px;
+          padding: 12px 14px; }
+  .card + .card { margin-top: 14px; }
+  /* Un canvas es un elemento reemplazado: sin una altura en CSS el navegador
+     usa la del atributo, y como el JS la reescribe multiplicada por el dpr,
+     crece en cada pasada y no para. De ahi la altura fija aqui. */
+  canvas { display: block; width: 100%; background: #0E1518; border-radius: 2px;
+           border: 1px solid var(--line); }
+  #sphere { height: 440px; cursor: grab; touch-action: none; }
+  #sweep { height: 230px; }
+  #sphere.drag { cursor: grabbing; }
+
+  label { display: block; margin: 12px 0 2px; color: var(--ink-2); font-size: 12px; }
+  label .v { float: right; color: var(--ink); font-family: var(--mono);
+             font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--acc); margin: 2px 0 0; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  button { flex: 1 1 auto; background: var(--surface-2); color: var(--ink);
+           border: 1px solid var(--line-strong); border-radius: 2px; padding: 5px 8px;
+           font: inherit; font-size: 12px; cursor: pointer; }
+  button:hover { border-color: var(--acc); color: var(--acc); }
+  button[aria-pressed="true"] { border-color: var(--acc); background: #15293A; color: var(--acc); }
+
+  table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11.5px;
+          font-variant-numeric: tabular-nums; }
+  td { padding: 3px 0; border-bottom: 1px solid var(--line); }
+  td:last-child { text-align: right; color: var(--ink); }
+  td:first-child { color: var(--ink-3); }
+  tr:last-child td { border-bottom: 0; }
+  .hot { color: var(--live); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px;
+            font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+              margin-right: 4px; vertical-align: -1px; }
+  p.note { color: var(--ink-3); font-size: 11.5px; margin: 10px 0 0; max-width: 62ch; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Normales cuantizadas</h1>
+  <p class="sub">Banco para elegir cuantas direcciones discretas puede tomar la normal del
+  plano y cuanto margen dar al enganche con las cartesianas de la rejilla. Arrastra la esfera
+  para girarla.</p>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>Direcciones permitidas</h2>
+        <canvas id="sphere"></canvas>
+        <div class="legend">
+          <span><i style="background:#7EB6E6"></i>direccion permitida</span>
+          <span><i style="background:#E5A65A"></i>casquete de enganche a I, J, K</span>
+          <span><i style="background:#5CC79B"></i>normal pedida y su cuantizacion</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Continuidad al girar</h2>
+        <canvas id="sweep"></canvas>
+        <p class="note">La normal recorre un circulo maximo inclinado, el barrido que haria
+        el manipulador. Arriba, cuanto se aparta la normal cuantizada de la pedida. Abajo, el
+        salto que pega el plano cada vez que cambia de direccion permitida: es el escalon que
+        se notaria al arrastrar.</p>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>Ajustes</h2>
+        <label>Direcciones en la semiesfera <span class="v" id="vN"></span>
+          <input type="range" id="rN" min="0" max="12" step="1" value="5" />
+        </label>
+        <label>Snap a la cartesiana <span class="v" id="vS"></span>
+          <input type="range" id="rS" min="0" max="15" step="0.5" value="5" />
+        </label>
+        <label>Inclinacion del barrido <span class="v" id="vT"></span>
+          <input type="range" id="rT" min="0" max="90" step="1" value="35" />
+        </label>
+        <div class="row">
+          <button id="bAxes" aria-pressed="true">Ejes</button>
+          <button id="bCaps" aria-pressed="true">Casquetes</button>
+          <button id="bPath" aria-pressed="true">Barrido</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Separacion entre direcciones</h2>
+        <table>
+          <tr><td>direcciones</td><td id="sN"></td></tr>
+          <tr><td>vecina mas proxima, media</td><td id="sMean"></td></tr>
+          <tr><td>la mas apretada</td><td id="sMin"></td></tr>
+          <tr><td>la mas suelta</td><td id="sMax"></td></tr>
+          <tr><td>teorico 2&middot;sqrt(1/N) rad</td><td id="sTheo"></td></tr>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Error de cuantizacion</h2>
+        <table>
+          <tr><td>medio</td><td id="eMean"></td></tr>
+          <tr><td>maximo</td><td id="eMax"></td></tr>
+          <tr><td>salto medio</td><td id="jMean"></td></tr>
+          <tr><td>salto maximo</td><td id="jMax" class="hot"></td></tr>
+          <tr><td>cambios en la vuelta</td><td id="jN"></td></tr>
+          <tr><td>recorrido enganchado</td><td id="cPct"></td></tr>
+        </table>
+        <p class="note">El salto maximo es lo que de verdad se nota: es cuanto se mueve el
+        plano de golpe en el peor cambio. El recorrido enganchado es la fraccion del barrido
+        que pasa pegada a una cartesiana.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ─────────────────────────── vectores ─────────────────────────── */
+const V = {
+  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  norm(a) { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  neg: (a) => [-a[0], -a[1], -a[2]],
+  angle(a, b) { return Math.acos(Math.min(1, Math.max(-1, V.dot(a, b)))) * 180 / Math.PI; },
+};
+const AXES = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+const AXIS_NAME = ["I", "J", "K"];
+
+/* ───────────────── la nube y la regla de cuantizado ───────────────── */
+/* Espiral de Fibonacci sobre la semiesfera: separacion casi igual en todas
+   partes, sin el amontonamiento en los polos de una rejilla de lat/lon. */
+const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+function fibonacciHemisphere(n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const z = 1 - (i + 0.5) / n;
+    const r = Math.sqrt(Math.max(0, 1 - z * z));
+    const a = GOLDEN * i;
+    out.push([r * Math.cos(a), r * Math.sin(a), z]);
+  }
+  return out;
+}
+
+/* El signo de la normal no cambia el plano, asi que todo va en |dot| y el
+   ganador se devuelve con el signo de la direccion pedida. */
+function snapToAxes(n, tolDeg) {
+  if (tolDeg <= 0) return null;
+  const cos = Math.cos(tolDeg * Math.PI / 180);
+  let best = null, bestDot = cos;
+  for (const a of AXES) {
+    const d = V.dot(n, a);
+    if (Math.abs(d) > bestDot) { bestDot = Math.abs(d); best = d < 0 ? V.neg(a) : a.slice(); }
+  }
+  return best;
+}
+function snapToCloud(n, cloud) {
+  let best = n, bestDot = -Infinity;
+  for (const p of cloud) {
+    const d = V.dot(n, p), a = Math.abs(d);
+    if (a > bestDot) { bestDot = a; best = d < 0 ? V.neg(p) : p; }
+  }
+  return best.slice();
+}
+function quantise(n, tolDeg, cloud) {
+  const onAxis = snapToAxes(n, tolDeg);
+  if (onAxis) return { v: onAxis, axis: true };
+  if (!cloud.length) return { v: n.slice(), axis: false };
+  return { v: snapToCloud(n, cloud), axis: false };
+}
+
+/* Separacion a la vecina mas proxima. Cuadratico, asi que por encima de unos
+   miles de puntos se estima sobre una muestra en vez de sobre todos. */
+function spacing(cloud) {
+  const n = cloud.length;
+  if (n < 2) return { mean: 0, min: 0, max: 0, exact: true };
+  const step = n > 1200 ? Math.ceil(n / 1200) : 1;
+  let sum = 0, min = Infinity, max = 0, count = 0;
+  for (let i = 0; i < n; i += step) {
+    let best = -Infinity;
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      const d = Math.abs(V.dot(cloud[i], cloud[j]));
+      if (d > best) best = d;
+    }
+    const deg = Math.acos(Math.min(1, best)) * 180 / Math.PI;
+    sum += deg; count++;
+    if (deg < min) min = deg;
+    if (deg > max) max = deg;
+  }
+  return { mean: sum / count, min, max, exact: step === 1 };
+}
+
+/* ─────────────────────────── estado ─────────────────────────── */
+const COUNTS = [0, 24, 48, 96, 192, 384, 768, 1536, 3072, 6144, 12288, 24576, 49152];
+const S = {
+  n: 384, tol: 5, tilt: 35,
+  showAxes: true, showCaps: true, showPath: true,
+  az: -0.7, el: 0.5,
+  cloud: [], space: null, sweep: null,
+};
+
+const $ = (id) => document.getElementById(id);
+const fmt = (v, d = 2) => (Math.abs(v) < 5e-7 ? 0 : v).toFixed(d);
+
+function rebuild() {
+  S.cloud = S.n > 0 ? fibonacciHemisphere(S.n) : [];
+  S.space = spacing(S.cloud);
+  S.sweep = computeSweep();
+  draw();
+  stats();
+}
+
+/* ── el barrido ──────────────────────────────────────────────────────
+   La normal recorre un circulo maximo inclinado `tilt` grados respecto del
+   ecuador, que es el camino que describe el manipulador al inclinar el plano.
+   Se mide lo que se aparta la cuantizada de la pedida, y el salto de la
+   cuantizada entre muestras consecutivas. */
+const SWEEP_SAMPLES = 1440;
+function computeSweep() {
+  const t = S.tilt * Math.PI / 180;
+  const e1 = [Math.cos(t), 0, Math.sin(t)];
+  const e2 = V.norm(V.cross([0, 0, 1], e1).some(Boolean) ? V.cross(e1, [0, 0, 1]) : [0, 1, 0]);
+  const err = new Float64Array(SWEEP_SAMPLES);
+  const jump = new Float64Array(SWEEP_SAMPLES);
+  const onAxis = new Uint8Array(SWEEP_SAMPLES);
+  let prev = null;
+  let eSum = 0, eMax = 0, jSum = 0, jMax = 0, jCount = 0, capped = 0;
+  for (let i = 0; i < SWEEP_SAMPLES; i++) {
+    const a = (i / SWEEP_SAMPLES) * 2 * Math.PI;
+    const want = V.norm([
+      e1[0] * Math.cos(a) + e2[0] * Math.sin(a),
+      e1[1] * Math.cos(a) + e2[1] * Math.sin(a),
+      e1[2] * Math.cos(a) + e2[2] * Math.sin(a),
+    ]);
+    const got = quantise(want, S.tol, S.cloud);
+    // Siempre en |dot|: una normal y su opuesta son el mismo plano.
+    const e = Math.acos(Math.min(1, Math.abs(V.dot(want, got.v)))) * 180 / Math.PI;
+    err[i] = e; eSum += e; if (e > eMax) eMax = e;
+    onAxis[i] = got.axis ? 1 : 0;
+    if (got.axis) capped++;
+    if (prev) {
+      const j = Math.acos(Math.min(1, Math.abs(V.dot(prev, got.v)))) * 180 / Math.PI;
+      jump[i] = j;
+      if (j > 1e-6) { jSum += j; jCount++; if (j > jMax) jMax = j; }
+    }
+    prev = got.v;
+  }
+  return {
+    err, jump, onAxis,
+    eMean: eSum / SWEEP_SAMPLES, eMax,
+    jMean: jCount ? jSum / jCount : 0, jMax, jCount,
+    capped: capped / SWEEP_SAMPLES,
+  };
+}
+
+/* ─────────────────────────── la esfera ─────────────────────────── */
+function basis() {
+  const { az, el } = S;
+  const fwd = V.norm([-Math.cos(el) * Math.sin(az), Math.cos(el) * Math.cos(az), -Math.sin(el)]);
+  let right = V.cross(fwd, [0, 0, 1]);
+  if (Math.hypot(...right) < 1e-6) right = [1, 0, 0];
+  right = V.norm(right);
+  const up = V.norm(V.cross(right, fwd));
+  return { fwd, right, up };
+}
+
+function draw() {
+  const c = $("sphere");
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  const w = c.clientWidth, h = c.clientHeight;
+  c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+
+  const cx = w / 2, cy = h / 2, R = Math.min(w, h) * 0.42;
+  const { fwd, right, up } = basis();
+  const project = (p) => [cx + V.dot(p, right) * R, cy - V.dot(p, up) * R, V.dot(p, fwd)];
+
+  // El contorno de la esfera.
+  g.beginPath(); g.arc(cx, cy, R, 0, 2 * Math.PI);
+  g.fillStyle = "#101A20"; g.fill();
+  g.strokeStyle = "#25313A"; g.lineWidth = 1; g.stroke();
+
+  // Casquetes de enganche a las cartesianas, como circulos sobre la esfera.
+  if (S.showCaps && S.tol > 0) {
+    g.strokeStyle = "rgba(229,166,90,.65)"; g.lineWidth = 1.2;
+    for (const a of AXES) for (const sgn of [1, -1]) {
+      const axis = sgn > 0 ? a : V.neg(a);
+      let e1 = V.cross(axis, [0, 0, 1]);
+      if (Math.hypot(...e1) < 1e-6) e1 = V.cross(axis, [1, 0, 0]);
+      e1 = V.norm(e1);
+      const e2 = V.norm(V.cross(axis, e1));
+      const t = S.tol * Math.PI / 180;
+      g.beginPath();
+      let started = false;
+      for (let i = 0; i <= 72; i++) {
+        const u = (i / 72) * 2 * Math.PI;
+        const p = V.norm([
+          axis[0] * Math.cos(t) + (e1[0] * Math.cos(u) + e2[0] * Math.sin(u)) * Math.sin(t),
+          axis[1] * Math.cos(t) + (e1[1] * Math.cos(u) + e2[1] * Math.sin(u)) * Math.sin(t),
+          axis[2] * Math.cos(t) + (e1[2] * Math.cos(u) + e2[2] * Math.sin(u)) * Math.sin(t),
+        ]);
+        const [x, y, d] = project(p);
+        if (d > 0) { started = false; continue; }   // la cara de atras no se pinta
+        if (!started) { g.moveTo(x, y); started = true; } else g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+  }
+
+  // Las direcciones permitidas, mas las opuestas para ver la esfera entera.
+  if (S.cloud.length) {
+    const pts = [];
+    for (const p of S.cloud) { pts.push(p); pts.push(V.neg(p)); }
+    const r = Math.max(0.9, Math.min(3, 46 / Math.sqrt(S.cloud.length)));
+    for (const p of pts) {
+      const [x, y, d] = project(p);
+      // De atras hacia delante: los de la cara oculta, apagados.
+      const front = d <= 0;
+      g.beginPath(); g.arc(x, y, front ? r : r * 0.7, 0, 2 * Math.PI);
+      g.fillStyle = front ? "rgba(126,182,230,.95)" : "rgba(126,182,230,.18)";
+      g.fill();
+    }
+  }
+
+  // El barrido y su version cuantizada.
+  if (S.showPath && S.sweep) {
+    const t = S.tilt * Math.PI / 180;
+    const e1 = [Math.cos(t), 0, Math.sin(t)];
+    const e2 = V.norm(V.cross(e1, [0, 0, 1]));
+    g.strokeStyle = "rgba(92,199,155,.85)"; g.lineWidth = 1.6;
+    g.beginPath();
+    let started = false;
+    for (let i = 0; i <= 240; i++) {
+      const a = (i / 240) * 2 * Math.PI;
+      const p = V.norm([
+        e1[0] * Math.cos(a) + e2[0] * Math.sin(a),
+        e1[1] * Math.cos(a) + e2[1] * Math.sin(a),
+        e1[2] * Math.cos(a) + e2[2] * Math.sin(a),
+      ]);
+      const [x, y, d] = project(p);
+      if (d > 0) { started = false; continue; }
+      if (!started) { g.moveTo(x, y); started = true; } else g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+
+  // Los ejes cartesianos.
+  if (S.showAxes) {
+    const cols = ["#e05a5a", "#5ec26a", "#5a8fe0"];
+    AXES.forEach((a, i) => {
+      const [x0, y0] = project([0, 0, 0]);
+      const [x1, y1, d] = project(a);
+      g.strokeStyle = cols[i]; g.lineWidth = d <= 0 ? 2 : 1;
+      g.globalAlpha = d <= 0 ? 1 : 0.35;
+      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+      g.fillStyle = cols[i]; g.font = "600 12px " + getComputedStyle(document.body).fontFamily;
+      g.fillText(AXIS_NAME[i], x1 + 5, y1 + 4);
+      g.globalAlpha = 1;
+    });
+  }
+}
+
+/* ─────────────────────────── las graficas ─────────────────────────── */
+function drawSweep() {
+  const c = $("sweep");
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  const w = c.clientWidth, h = c.clientHeight;
+  c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const sw = S.sweep;
+  if (!sw) return;
+
+  const padL = 44, padR = 10, padT = 12, padB = 20, gap = 14;
+  const plotW = w - padL - padR;
+  const plotH = (h - padT - padB - gap) / 2;
+
+  const panel = (top, data, maxV, label, colour, fill) => {
+    g.strokeStyle = "#25313A"; g.lineWidth = 1;
+    g.strokeRect(padL, top, plotW, plotH);
+    g.fillStyle = "#84949C";
+    g.font = '10px "Cascadia Mono", Consolas, monospace';
+    g.textAlign = "right";
+    g.fillText(fmt(maxV, 1) + "°", padL - 5, top + 9);
+    g.fillText("0", padL - 5, top + plotH);
+    g.textAlign = "left";
+    g.fillStyle = "#A3B1BA";
+    g.fillText(label, padL + 6, top + 11);
+
+    // Tramo enganchado a una cartesiana, de fondo.
+    g.fillStyle = "rgba(229,166,90,.16)";
+    for (let i = 0; i < data.length; i++) {
+      if (!sw.onAxis[i]) continue;
+      g.fillRect(padL + (i / data.length) * plotW, top + 1, plotW / data.length + 0.6, plotH - 2);
+    }
+
+    g.beginPath();
+    for (let i = 0; i < data.length; i++) {
+      const x = padL + (i / (data.length - 1)) * plotW;
+      const y = top + plotH - (maxV ? data[i] / maxV : 0) * (plotH - 4);
+      if (i) g.lineTo(x, y); else g.moveTo(x, y);
+    }
+    if (fill) {
+      g.lineTo(padL + plotW, top + plotH); g.lineTo(padL, top + plotH); g.closePath();
+      g.fillStyle = colour.replace("1)", ".22)"); g.fill();
+      g.beginPath();
+      for (let i = 0; i < data.length; i++) {
+        const x = padL + (i / (data.length - 1)) * plotW;
+        const y = top + plotH - (maxV ? data[i] / maxV : 0) * (plotH - 4);
+        if (i) g.lineTo(x, y); else g.moveTo(x, y);
+      }
+    }
+    g.strokeStyle = colour; g.lineWidth = 1.2; g.stroke();
+  };
+
+  const eMax = Math.max(1e-6, sw.eMax);
+  const jMax = Math.max(1e-6, sw.jMax);
+  panel(padT, sw.err, eMax, "error contra la normal pedida", "rgba(126,182,230,1)", true);
+  panel(padT + plotH + gap, sw.jump, jMax, "salto al cambiar de direccion", "rgba(229,166,90,1)", false);
+
+  g.fillStyle = "#84949C"; g.textAlign = "center";
+  g.font = '10px "Cascadia Mono", Consolas, monospace';
+  g.fillText("una vuelta completa del barrido", padL + plotW / 2, h - 6);
+}
+
+/* ─────────────────────────── numeros ─────────────────────────── */
+function stats() {
+  const sp = S.space, sw = S.sweep;
+  $("sN").textContent = S.n === 0 ? "continua" : String(S.n);
+  const approx = sp && !sp.exact ? " ~" : "";
+  $("sMean").textContent = S.n ? fmt(sp.mean) + "°" + approx : "—";
+  $("sMin").textContent = S.n ? fmt(sp.min) + "°" + approx : "—";
+  $("sMax").textContent = S.n ? fmt(sp.max) + "°" + approx : "—";
+  // Reparto uniforme: cada punto cubre 2*pi/N estereorradianes de semiesfera,
+  // un casquete de radio angular sqrt(2/N) rad.
+  $("sTheo").textContent = S.n ? fmt(Math.sqrt(2 / S.n) * 180 / Math.PI) + "°" : "—";
+
+  $("eMean").textContent = fmt(sw.eMean) + "°";
+  $("eMax").textContent = fmt(sw.eMax) + "°";
+  $("jMean").textContent = fmt(sw.jMean) + "°";
+  $("jMax").textContent = fmt(sw.jMax) + "°";
+  $("jN").textContent = String(sw.jCount);
+  $("cPct").textContent = fmt(sw.capped * 100, 1) + " %";
+
+  $("vN").textContent = S.n === 0 ? "continua" : String(S.n);
+  $("vS").textContent = S.tol > 0 ? fmt(S.tol, 1) + "°" : "sin snap";
+  $("vT").textContent = S.tilt + "°";
+  drawSweep();
+}
+
+/* ─────────────────────────── controles ─────────────────────────── */
+$("rN").addEventListener("input", (e) => { S.n = COUNTS[+e.target.value]; rebuild(); });
+$("rS").addEventListener("input", (e) => { S.tol = +e.target.value; S.sweep = computeSweep(); draw(); stats(); });
+$("rT").addEventListener("input", (e) => { S.tilt = +e.target.value; S.sweep = computeSweep(); draw(); stats(); });
+for (const [id, key] of [["bAxes", "showAxes"], ["bCaps", "showCaps"], ["bPath", "showPath"]]) {
+  $(id).addEventListener("click", () => {
+    S[key] = !S[key];
+    $(id).setAttribute("aria-pressed", String(S[key]));
+    draw();
+  });
+}
+
+let drag = null;
+const sphere = $("sphere");
+sphere.addEventListener("pointerdown", (e) => {
+  sphere.setPointerCapture(e.pointerId);
+  sphere.classList.add("drag");
+  drag = { x: e.clientX, y: e.clientY };
+});
+sphere.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  S.az -= (e.clientX - drag.x) * 0.008;
+  S.el = Math.max(-1.5, Math.min(1.5, S.el + (e.clientY - drag.y) * 0.008));
+  drag = { x: e.clientX, y: e.clientY };
+  draw();
+});
+for (const t of ["pointerup", "pointercancel"]) {
+  sphere.addEventListener(t, () => { drag = null; sphere.classList.remove("drag"); });
+}
+addEventListener("resize", () => { draw(); drawSweep(); });
+
+$("rN").value = String(COUNTS.indexOf(S.n));
+$("rS").value = String(S.tol);
+$("rT").value = String(S.tilt);
+rebuild();
+</script>
+</body>
+</html>

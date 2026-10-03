@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MPR Viewer</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="panel">
+        <h1>MPR Viewer</h1>
+
+        <section>
+          <label>Volumen de ejemplo
+            <select id="sample"></select>
+          </label>
+          <label>Abrir .nii / .nii.gz
+            <input type="file" id="file" accept=".nii,.gz" />
+          </label>
+          <div id="status" class="status"></div>
+        </section>
+
+        <section>
+          <h2>Plano</h2>
+          <div class="sub">Rejilla de adquisicion</div>
+          <div class="row" id="grid-presets"></div>
+          <div class="sub">Ejes del paciente</div>
+          <div class="row" id="world-presets"></div>
+          <div class="row">
+            <button id="reset-camera" title="Devuelve la camara a su encuadre inicial">Reencuadrar camara</button>
+          </div>
+          <div id="plane-info" class="mono"></div>
+          <div class="sub">El borde de la imagen toma el color de la normal:
+            rojo el eje X (R/L), verde el Y (A/P), azul el Z (S/I).</div>
+        </section>
+
+        <section>
+          <h2>Ventana / nivel</h2>
+          <div id="wl-info" class="mono"></div>
+          <div id="wl-presets" class="row wrap"></div>
+        </section>
+
+        <section>
+          <h2>Snap a la cartesiana</h2>
+          <label>Margen <span id="snap-val" class="val"></span>
+            <input type="range" id="snap" min="0" max="15" step="0.5" value="2.5" />
+          </label>
+        </section>
+
+        <section>
+          <h2>Grosor de corte</h2>
+          <label>Espesor <span id="slab-val" class="val"></span>
+            <input type="range" id="slab" min="0" max="50" step="0.5" value="0" />
+          </label>
+          <label>Proyeccion
+            <select id="slab-mode">
+              <option value="0">MIP (maximo)</option>
+              <option value="1">Media</option>
+              <option value="2">MinIP (minimo)</option>
+            </select>
+          </label>
+        </section>
+
+        <section>
+          <h2>Sonda</h2>
+          <div id="probe-info" class="mono"></div>
+        </section>
+
+        <section>
+          <h2>Volumen</h2>
+          <div id="vol-info" class="mono"></div>
+        </section>
+
+        <section class="help">
+          <h2>Raton</h2>
+          <ul>
+            <li><b>Anillo, boton izquierdo</b>: inclinar el plano</li>
+            <li><b>Imagen del corte</b>: deslizar por la normal</li>
+            <li><b>Anillo, boton central</b>: deslizar tambien</li>
+            <li><b>Espacio vacio</b>: orbitar la camara</li>
+            <li><b>Rueda</b>: sobre el plano cambia de corte, fuera acerca</li>
+            <li><b>Doble clic en una cara de la caja</b>: lleva el plano a ese
+              plano cartesiano de la rejilla, con transicion animada</li>
+            <li><b>Ctrl + arrastrar</b>: ventana / nivel</li>
+            <li><b>Barra de grises</b>: arrastrar los limites, o el cuerpo para
+              desplazar los dos. Rueda ensancha, doble clic reinicia,
+              Alt afina</li>
+            <li><b>Doble clic fuera de la caja</b>: reencuadrar la camara</li>
+            <li><b>Esc</b>: cancelar el arrastre en curso</li>
+          </ul>
+          <h2>Teclas</h2>
+          <ul>
+            <li><b>I J K</b>: planos de la rejilla, con transicion animada</li>
+            <li><b>A C S</b>: axial, coronal, sagital</li>
+            <li><b>F</b>: reencuadrar la camara</li>
+          </ul>
+        </section>
+      </aside>
+
+      <main id="views">
+        <canvas id="gl"></canvas>
+        <div class="grid">
+          <div class="pane" id="pane-3d">
+            <span class="lbl title"></span>
+            <span class="lbl slice"></span>
+            <span class="lbl hint" id="hint-3d"></span>
+            <span class="axis" id="axis-0"></span>
+            <span class="axis" id="axis-1"></span>
+            <span class="axis" id="axis-2"></span>
+          </div>
+        </div>
+        <div id="colorbar"></div>
+        <div id="drop-hint">Suelta aqui un fichero .nii o .nii.gz</div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

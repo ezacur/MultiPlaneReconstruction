@@ -1,0 +1,210 @@
+:root {
+  --bg: #15161a;
+  --panel: #1e2027;
+  --border: #2d303a;
+  --text: #d6d8de;
+  --muted: #8a8f9c;
+  --accent: #4f8cff;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+#app { display: grid; grid-template-columns: 300px 1fr; height: 100vh; }
+
+#panel { background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto; padding: 12px 14px 24px; }
+#panel h1 { font-size: 16px; margin: 0 0 12px; letter-spacing: .02em; }
+#panel h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 6px; }
+#panel section { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+#panel section:last-child { border-bottom: 0; }
+#panel label { display: block; margin: 6px 0; color: var(--muted); }
+#panel label .val { float: right; color: var(--text); font-variant-numeric: tabular-nums; }
+#panel select, #panel input[type=file] { display: block; width: 100%; margin-top: 4px; background: #14151a; color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px; padding: 5px 6px; font: inherit; }
+#panel input[type=range] { display: block; width: 100%; margin: 4px 0 2px; accent-color: var(--accent); }
+.row { display: flex; gap: 6px; margin: 4px 0; }
+.row.wrap { flex-wrap: wrap; }
+button { flex: 1; background: #2a2d37; color: var(--text); border: 1px solid var(--border); border-radius: 4px;
+  padding: 6px 8px; font: inherit; cursor: pointer; }
+button:hover { background: #343846; }
+button.active { border-color: var(--accent); color: #fff; background: #2c3a5c; }
+.mono { font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; font-size: 11.5px; white-space: pre; color: var(--text);
+  line-height: 1.45; overflow-x: auto; }
+.status { color: var(--muted); min-height: 1.2em; margin-top: 6px; }
+.status.err { color: #ff7b72; }
+.help ul { margin: 0; padding-left: 16px; color: var(--muted); }
+.help li { margin: 3px 0; }
+.help b { color: var(--text); font-weight: 600; }
+
+#views { position: relative; overflow: hidden; }
+#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+.grid { position: absolute; inset: 0; display: grid; padding: 4px; }
+.pane { position: relative; border: 2px solid var(--c, #444); border-radius: 3px; overflow: hidden;
+  touch-action: none; user-select: none; }
+#pane-3d { --c: #33373f; cursor: grab; }
+.pane .lbl { position: absolute; pointer-events: none; font-size: 12px; color: #cfd3dc; text-shadow: 0 0 3px #000, 0 0 3px #000; }
+.pane .title { top: 8px; left: 10px; font-weight: 600; color: var(--c); font-size: 13px; }
+.pane .slice { top: 26px; left: 10px; font-variant-numeric: tabular-nums; }
+.pane .hint { bottom: 10px; right: 12px; color: var(--muted); }
+.pane .axis { position: absolute; pointer-events: none; font-weight: 700;
+  transform: translate(-50%, -50%); text-shadow: 0 0 3px #000, 0 0 3px #000;
+  white-space: nowrap; }
+.pane .axis b { font-size: 12px; }
+.pane .axis i { font-style: normal; font-size: 9px; font-weight: 600; opacity: .7; margin-left: 1px; }
+
+.sub { color: var(--muted); font-size: 11px; margin: 8px 0 2px; }
+
+#drop-hint { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; font-size: 18px;
+  background: rgba(79,140,255,.15); border: 2px dashed var(--accent); pointer-events: none; }
+#views.dragover #drop-hint { display: flex; }
+
+@media (max-width: 900px) {
+  #app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  #panel { max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--border); }
+}
+
+/* ---- colour bar ---------------------------------------------------------- */
+
+/* The demo's own dark palette, kept local to the bar so it reads as the same
+   instrument rather than as a panel widget. */
+.cb { --cb-surface: #131A1E; --cb-line: #25313A; --cb-line-strong: #3A4A55;
+  --cb-ink: #E4ECF0; --cb-ink-2: #A3B1BA; --cb-ink-3: #84949C;
+  --cb-live: #E5A65A; --cb-hl: #F2F6F8;
+  --cb-hist: 46px; --cb-bar: 18px; --cb-ticks: 62px; }
+
+/* Floats over the render pane, bottom right. It is a sibling of the pane, not
+   a child, so its pointer events never bubble into the 3D handlers. */
+#colorbar { position: absolute; right: 14px; bottom: 14px; z-index: 10;
+  background: #131A1E; border: 1px solid #25313A; border-radius: 3px;
+  padding: 10px 10px 10px 8px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7); }
+
+/* The track is exactly as wide as its three columns, so the saturation labels
+   can be anchored by their right edge against the bar. */
+.cb-track { position: relative; height: 260px; touch-action: none; cursor: crosshair;
+  width: calc(var(--cb-hist) + var(--cb-bar) + var(--cb-ticks));
+  transition: width .18s ease; }
+
+/* A canvas is a replaced element: without an explicit pixel height it falls
+   back to its intrinsic size and the bar collapses. The JS stamps width and
+   height in device pixels; these rules fix the CSS box. */
+.cb-hist { position: absolute; left: 0; top: 0; height: 100%; width: var(--cb-hist);
+  display: block; pointer-events: none; transition: width .18s ease; }
+.cb.nohist .cb-hist { display: none; }
+/* The frame goes in box-shadow, not border: with border-box a border eats 2 px
+   of height and shifts the ramp by one, and then the histogram, the handles and
+   the marks stop lining up with it. */
+.cb-bar { position: absolute; left: var(--cb-hist); top: 0; height: 100%; width: var(--cb-bar);
+  display: block; cursor: crosshair; box-shadow: 0 0 0 1px var(--cb-line-strong);
+  transition: left .18s ease; }
+.cb-track.panning, .cb-track.panning * { cursor: grabbing !important; }
+.cb-track.dragging, .cb-track.dragging * { cursor: ns-resize !important; }
+
+.cb-histbtn { position: absolute; left: calc(var(--cb-hist) - 11px); top: 0; width: 11px;
+  height: 11px; z-index: 9; display: flex; align-items: center; justify-content: center;
+  padding: 0; flex: none; font-family: ui-monospace, Consolas, monospace; font-size: 8px;
+  line-height: 1; color: var(--cb-ink-2); background: var(--cb-surface);
+  border: 1px solid var(--cb-line-strong); border-radius: 0 0 0 2px; cursor: pointer;
+  transition: left .18s ease; }
+.cb-histbtn:hover { color: var(--cb-live); border-color: var(--cb-live);
+  background: var(--cb-surface); }
+
+/* The axis lives INSIDE the window: past the limits there are no ticks, and the
+   first and last of the scale are the limit boxes themselves. */
+.cb-ticks { position: absolute; left: calc(var(--cb-hist) + var(--cb-bar) + 4px); top: 0;
+  bottom: 0; right: 0; pointer-events: none; transition: left .18s ease; }
+.cb-tick { position: absolute; left: 0; transform: translateY(-50%); display: flex;
+  align-items: center; gap: 4px; font-family: ui-monospace, Consolas, monospace;
+  font-size: 10.5px; color: var(--cb-ink-3); white-space: nowrap; }
+.cb-tick i { display: block; width: 5px; height: 1px; background: var(--cb-line-strong); }
+
+/* A limit's tick outweighs the axis ones: thicker mark, bigger figure, bold and
+   in the strong ink, against the 10.5 px in --cb-ink-3 of the others. */
+.cb-lim { position: absolute; left: calc(var(--cb-hist) + var(--cb-bar) + 4px);
+  transform: translateY(-50%); display: flex; align-items: center; gap: 4px;
+  z-index: 8; transition: left .18s ease; }
+.cb-lim i { display: block; width: 6px; height: 2px; background: var(--cb-ink-2); flex: none; }
+.cb-lim-in { width: 54px; font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+  font-weight: 600; text-align: left; color: var(--cb-ink); background: transparent;
+  border: 1px solid transparent; border-radius: 2px; padding: 1px 3px;
+  font-variant-numeric: tabular-nums; }
+.cb-lim-in:hover { background: #182126; border-color: var(--cb-line); }
+.cb-lim-in:focus { background: var(--cb-surface); border-color: #7EB6E6; outline: none; }
+
+/* Saturation on each side, anchored by its right edge against the bar and of
+   automatic width: a long label overflows left over the histogram instead of
+   onto the ramp. */
+.cb-pct { position: absolute; right: calc(var(--cb-bar) + var(--cb-ticks));
+  padding: 0 9px 0 4px; text-align: right; transform: translateY(-50%);
+  font-family: ui-monospace, Consolas, monospace; font-size: 10px; color: var(--cb-live);
+  letter-spacing: .02em; white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: var(--cb-surface); border-radius: 2px; pointer-events: none; z-index: 6; }
+.cb-pct::after { content: ""; position: absolute; right: 1px; top: calc(50% - 1px);
+  width: 7px; height: 2px; background: var(--cb-live); }
+.cb.nohist .cb-pct { display: none; }
+
+/* Range of the data: two fixed marks on the left edge of the bar. The stretch
+   between them is where there is data; the rest is domain margin or a limit
+   pulled out. In ink, not orange: they belong to the data, not to the limits. */
+.cb-dmark { position: absolute; left: calc(var(--cb-hist) - 6px); width: 6px; height: 1px;
+  background: var(--cb-ink-2); transform: translateY(-50%); pointer-events: none; z-index: 5;
+  transition: left .18s ease; }
+
+/* The handle is only the line: no little square covering the ramp. The feedback
+   is the line itself, which thickens and turns orange. The grab area stays
+   16 px tall. */
+.cb-hnd { position: absolute; left: var(--cb-hist); width: var(--cb-bar); height: 16px;
+  transform: translateY(-50%); cursor: ns-resize; z-index: 5; transition: left .18s ease; }
+.cb-hnd::before { content: ""; position: absolute; left: -4px; right: -4px; top: 7px;
+  height: 2px; background: var(--cb-hl); box-shadow: 0 0 0 1px rgba(0,0,0,.75); }
+.cb-hnd:hover::before, .cb-hnd.act::before { height: 4px; top: 6px; background: var(--cb-live);
+  box-shadow: 0 0 0 1px var(--cb-hl); }
+
+/* Percentile guides while Ctrl is held: a tick per magnet stop in the band to
+   the left of the bar, with its figure. Background only behind the figure; over
+   the bare histogram it would be unreadable. */
+.cb-gtick { position: absolute; left: 0; width: var(--cb-hist); padding: 0 9px 0 2px;
+  text-align: right; transform: translateY(-50%); font-family: ui-monospace, Consolas, monospace;
+  font-size: 9.5px; color: var(--cb-live); white-space: nowrap;
+  font-variant-numeric: tabular-nums; pointer-events: none; z-index: 5;
+  transition: width .18s ease; }
+.cb-gtick:not(:empty) { background: linear-gradient(to right, transparent 0,
+  var(--cb-surface) 6px, var(--cb-surface) calc(100% - 9px), transparent 100%); }
+.cb-gtick::after { content: ""; position: absolute; right: 1px; top: calc(50% - 0.5px);
+  width: 7px; height: 1px; background: var(--cb-live); }
+.cb.nohist .cb-gtick { display: none; }
+
+.cb-needle { position: absolute; left: calc(var(--cb-hist) - 6px);
+  width: calc(var(--cb-bar) + 12px); height: 0; border-top: 1px solid var(--cb-hl);
+  filter: drop-shadow(0 0 1.2px rgba(0,0,0,.9)); pointer-events: none; z-index: 7;
+  display: none; transition: left .18s ease; }
+.cb-needle span { position: absolute; left: calc(100% + 5px); top: -9px;
+  font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; color: var(--cb-ink);
+  background: var(--cb-surface); border: 1px solid var(--cb-line-strong); border-radius: 2px;
+  padding: 0 4px; white-space: nowrap; filter: none; }
+
+/* A warp knot. Its horizontal place is the grey it carries, its vertical place
+   the value it paints; the line joining them, drawn on the bar, is the transfer
+   function. The grab area follows the circle so it leaves the rest of the bar
+   width free for the handle. */
+.cb-knot { position: absolute;
+  left: calc(var(--cb-hist) + var(--cb-ky) * var(--cb-bar) - 6px);
+  width: 12px; height: 14px; transform: translateY(-50%); cursor: ns-resize; z-index: 4; }
+.cb-knot::after { content: ""; position: absolute; left: 50%; top: 4px; width: 7px; height: 7px;
+  margin-left: -3.5px; background: var(--cb-hl); border: 1px solid rgba(0,0,0,.75);
+  border-radius: 50%; box-shadow: 0 1px 2px rgba(0,0,0,.4); }
+.cb-knot:hover::after, .cb-knot.act::after { background: #A6CDEE; border-color: var(--cb-hl); }
+
+/* Saturation colour dialog, anchored to the pointer. */
+.cb-pick { position: fixed; z-index: 50; background: #131A1E; border: 1px solid #3A4A55;
+  border-radius: 3px; box-shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7);
+  padding: 7px 8px; display: flex; flex-direction: column; gap: 6px; }
+.cb-pick[hidden] { display: none; }
+.cb-pick-t { margin: 0; font-family: ui-monospace, Consolas, monospace; font-size: 9.5px;
+  letter-spacing: .12em; text-transform: uppercase; color: #84949C; }
+.cb-sw { display: grid; grid-template-columns: repeat(6, 22px); gap: 4px; }
+.cb-sw button, .cb-sw input[type=color] { height: 22px; width: 22px; padding: 0; flex: none;
+  border-radius: 2px; border: 1px solid #3A4A55; cursor: pointer; background-clip: padding-box; }
+.cb-sw button[aria-pressed="true"] { outline: 2px solid #7EB6E6; outline-offset: 1px; }
+.cb-sw button:focus-visible, .cb-sw input:focus-visible { outline: 2px solid #7EB6E6;
+  outline-offset: 1px; }
