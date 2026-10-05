@@ -208,7 +208,13 @@ export function attachInteraction(
     // camera.
     const ray = rayAt(e);
     const mark = ray ? widget.markAt(ray) : null;
-    if (mark) hooks.onPlane('grid', mark.index);
+    if (mark) {
+      // A shortcut for the tilt the mark offers: it turns about that tilt's
+      // axis and keeps the plane's offset, where the I, J and K keys bring
+      // the plane back through the centre.
+      if (!widget.turnToMark(mark)) hooks.onPlane('grid', mark.index);
+      hooks.onChange();
+    }
     else if (!ray || !widget.overPlane(ray)) hooks.onResetCamera();
   });
 

@@ -363,6 +363,31 @@ export class Scene {
     this.transition = { q0, q1, d0: this.distance, d1: 0, start: performance.now(), duration };
   }
 
+  /**
+   * Animate a turn of `angle` radians about a unit `axis` through the pivot,
+   * as a tilt of the ring would make it: the offset is kept, re-clamped inside
+   * the volume frame by frame, and the end is snapped onto a grid axis when it
+   * lands within the snap, as a manual turn is. `index` names the grid plane
+   * it heads for, for the preset it declares.
+   */
+  animateTurn(axis: vec3, angle: number, index: number, duration = TRANSITION_MS): void {
+    const f0 = this.frameSnapshot();
+    const d0 = this.distance;
+    // Work the destination out the way a drag would, snap included, then put
+    // the plane back where it is and travel there.
+    this.rotate(axis, angle, f0);
+    const q1 = this.frameQuat();
+    this.setFrame(f0);
+    this.distance = d0;
+    this.preset = { space: 'grid', axis: index };
+    if (duration <= 0) {
+      this.setFrameFromQuat(q1);
+      this.distance = this.insideDistance(d0);
+      return;
+    }
+    this.transition = { q0: this.frameQuat(), q1, d0, d1: d0, start: performance.now(), duration };
+  }
+
   get animating(): boolean {
     return this.transition !== null;
   }
@@ -375,7 +400,9 @@ export class Scene {
     // Ease in and out, so the plane starts and settles gently.
     const s = raw < 0.5 ? 4 * raw * raw * raw : 1 - Math.pow(-2 * raw + 2, 3) / 2;
     this.setFrameFromQuat(quat.slerp(quat.create(), t.q0, t.q1, s));
-    this.distance = t.d0 + (t.d1 - t.d0) * s;
+    // Kept inside, as a manual turn is: on the way round the offset may not
+    // fit the volume as the plane faces mid-turn.
+    this.distance = this.insideDistance(t.d0 + (t.d1 - t.d0) * s);
     if (raw >= 1) {
       this.transition = null;
       return false;
@@ -503,6 +530,20 @@ export class Scene {
     this.transition = null;
     const [lo, hi] = this.distanceRange();
     this.distance = Math.min(Math.max(d, lo), hi);
+  }
+
+  /**
+   * The offset `d`, kept far enough inside the volume that the plane cuts a
+   * real image. Clamping to the very end of distanceRange() would leave the
+   * plane grazing an edge or a corner of the box, a slice of no area: so the
+   * plane is held back by 5 per cent of the range, and never less than a
+   * voxel step. For a turn, where the offset that fitted along the old normal
+   * may not fit along the new one.
+   */
+  insideDistance(d: number): number {
+    const [lo, hi] = this.distanceRange();
+    const margin = Math.min((hi - lo) / 2, Math.max(this.stepAlongNormal(), 0.05 * (hi - lo)));
+    return Math.min(Math.max(d, lo + margin), hi - margin);
   }
 
   scrollSlices(slices: number): void {

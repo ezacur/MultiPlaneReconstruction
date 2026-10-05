@@ -523,6 +523,7 @@ export class Renderer {
     color: [number, number, number],
     mvp: mat4,
     depth: DepthMode,
+    nudge = 0,
   ): void {
     if (verts.length < RIBBON_STRIDE * 3) return;
     const gl = this.gl;
@@ -538,10 +539,16 @@ export class Renderer {
     gl.uniform3f(this.ribbonU['uColor'] ?? null, color[0], color[1], color[2]);
     gl.uniform3f(this.ribbonU['uFogColor'] ?? null, FOG_RGB[0], FOG_RGB[1], FOG_RGB[2]);
     this.setDepth(depth);
+    // See LineBatch.nudge: settles a tie with the slice a ribbon lies in.
+    if (nudge) {
+      gl.enable(gl.POLYGON_OFFSET_FILL);
+      gl.polygonOffset(nudge, 2 * nudge);
+    }
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.drawArrays(gl.TRIANGLES, 0, verts.length / RIBBON_STRIDE);
     gl.disable(gl.BLEND);
+    if (nudge) gl.disable(gl.POLYGON_OFFSET_FILL);
   }
 
   render(scene: Scene, widget: PlaneWidget, rect: Rect): void {
@@ -649,10 +656,10 @@ export class Renderer {
       discardOutside: true,
     });
 
-    // The bounding box fades in and out with the ring: both are scaffolding
-    // around the slice, shown while the pointer is on it.
+    // The bounding box fades in while the pointer is over the image, and out
+    // as soon as it leaves it: scaffolding, shown only while reading the slice.
     const c = scene.corners();
-    const boxAlpha = BOX_ALPHA * widget.shown;
+    const boxAlpha = BOX_ALPHA * widget.boxShown;
     if (c.length === 8 && boxAlpha > 0.002) {
       // corners() enumerates i fastest, then j, then k.
       const edges = [
@@ -681,7 +688,7 @@ export class Renderer {
 
     for (const batch of widget.geometry() as LineBatch[]) {
       if (batch.ribbon) {
-        this.drawRibbon(batch.verts, batch.color, mvp, batch.depth ?? 'off');
+        this.drawRibbon(batch.verts, batch.color, mvp, batch.depth ?? 'off', batch.nudge);
       } else {
         this.drawLines(
           batch.verts,

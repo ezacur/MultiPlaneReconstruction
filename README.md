@@ -92,9 +92,14 @@ indice K. Es el que sale por defecto.
 
 Hay dos formas directas de llevar el plano a una cartesiana de la rejilla:
 
-- las teclas **I**, **J** y **K**, que lo llevan al plano de normal I, J o K;
+- las teclas **I**, **J** y **K**, que lo llevan al plano de normal I, J o K
+  pasando por el centro del volumen;
 - un **doble clic sobre una marca de color del anillo**: la roja lleva al plano
-  de normal I, la verde al de J y la azul al de K. Al pasar el raton por encima
+  de normal I, la verde al de J y la azul al de K. Es un atajo del giro que la
+  marca ofrece: el plano gira, animado, alrededor del eje que tendria un
+  arrastre empezado en esa marca, y se detiene en la parada que muestra la
+  esfera hueca. Como un arrastre, conserva el desplazamiento del plano, con el
+  mismo recorte contra el volumen, en vez de devolverlo al centro. Al pasar el raton por encima
   de una marca, esta se resalta mostrando su borde, y la pista de la vista dice
   a que plano lleva. La zona que responde ocupa todo el ancho del anillo, no solo
   la franja fina de color, para que sea facil acertar.
@@ -172,7 +177,10 @@ camara, tanto el de alrededor como el hueco entre la imagen y el anillo.
 El anillo no esta siempre a la vista. Aparece en medio segundo cuando el raton
 pasa por la imagen o por el propio anillo, se queda mientras dura un arrastre,
 y se desvanece en dos segundos cuando el raton se va, de modo que en reposo el
-corte se ve limpio. La caja del volumen se funde con el. Al cargar un volumen
+corte se ve limpio. La caja del volumen tiene su propia regla: se enciende
+solo mientras el raton esta sobre la imagen, y empieza a apagarse en cuanto sale
+de ella, tambien si pasa al anillo. Aparece en el mismo medio segundo, pero se
+apaga en diez, mucho mas despacio que los dos segundos del anillo. Al cargar un volumen
 se muestran y se desvanecen, para que se vea que estan.
 
 Las dos guias del arrastre, el arco de giro y el rail de desplazamiento, son
@@ -200,6 +208,19 @@ iluminacion en la escena se lee igual que una esfera.
 Los dos gestos son absolutos: el angulo y el desplazamiento se recalculan desde
 la terna capturada al empezar el arrastre, por lo que no derivan. `Esc`
 restaura ese estado.
+
+El pivote esta fijo en el centro del volumen, asi que un desplazamiento que
+cabia a lo largo de la normal de partida puede quedar fuera del volumen a lo
+largo de la nueva. En un volumen muy largo en K, un plano axial cerca de la tapa
+inclinado 90 grados acabaria fuera de la caja y se perderia. Para evitarlo,
+durante el giro el desplazamiento se recorta contra el volumen tal como mira el
+plano en cada momento, dejando un margen del 5 por ciento del rango, y nunca
+menos de un voxel, para que siempre corte una imagen y no solo roce una arista.
+El recorte se hace siempre desde el desplazamiento con el que empezo el gesto,
+asi que al deshacer el giro el plano recupera su sitio. Medido en un volumen de
+100 x 100 x 400 con el plano a 180 mm del centro: inclinado 90 grados queda a
+45 mm, junto a la cara lateral, y al volver a 0 grados vuelve a 180. Las
+transiciones animadas a una cartesiana se recortan igual en cada frame.
 
 El anillo y la imagen estan en el mismo plano y se solapan, asi que quien
 queda delante se decide a proposito, con un desplazamiento de profundidad: en

@@ -64,6 +64,8 @@ const RING_NUDGE_ENGAGED = -1;
 const FADE_IN_S = 0.5;
 /** ...and out over this long once it has left. */
 const FADE_OUT_S = 2;
+/** The bounding box lingers much longer than the band on its way out. */
+const BOX_FADE_OUT_S = 10;
 const RING_OUTER = 1.0;
 /** The coloured grab windows run only along the band's outer rim. */
 const WINDOW_INNER = 0.97;
@@ -73,6 +75,17 @@ const RAIL: [number, number, number] = [0.55, 0.58, 0.66];
 const BEAD: [number, number, number] = [1, 1, 1];
 const BEAD_RIM: [number, number, number] = [0.1, 0.11, 0.14];
 /** The hollow marker on the arc where the plane lands on a grid plane. */
+/** The axis of a turn reaches this far either side of the pivot, as a
+ *  fraction of the widget radius: inside the band. */
+const AXIS_REACH = 0.375;
+/** The axis is a cylinder of constant width, in pixels: only its opacity
+ *  follows depth. Short and stout, it reads apart from the thin ray. */
+const AXIS_WIDTH = 8;
+/** The ray to the pointer is thin, so the two never read as one line. */
+const RAY_WIDTH = 0.4;
+const AXIS_OPACITY = 0.5;
+/** The ray from the axis to the pointer, relative to the axis's opacity. */
+const RAY_OPACITY = 0.75;
 const STOP_R_IN = 0.026;
 const STOP_R_OUT = 0.036;
 /** The grab windows on the band are kept at least this wide, so they still
@@ -212,7 +225,19 @@ function depthRibbon(
   segments: [vec3, vec3][],
   forward: vec3,
   color: [number, number, number],
+  opts: {
+    widthScale?: number;
+    alphaScale?: number;
+    nudge?: number;
+    /** A constant width in pixels instead of the taper: a cylinder, not a cone. */
+    constantWidth?: number;
+    /** False keeps the colour from sinking into the background with depth. */
+    fog?: boolean;
+  } = {},
 ): LineBatch[] {
+  const widthScale = opts.widthScale ?? 1;
+  const alphaScale = opts.alphaScale ?? 1;
+  const useFog = opts.fog ?? true;
   if (segments.length === 0) return [];
   let lo = Infinity;
   let hi = -Infinity;
@@ -238,7 +263,10 @@ function depthRibbon(
 
   const verts: number[] = [];
   const vertex = (p: vec3, other: vec3, side: number, dirSign: number) => {
-    const [w, a, fog] = at(p);
+    const [w0, a0, fog0] = at(p);
+    const w = opts.constantWidth ?? w0 * widthScale;
+    const a = a0 * alphaScale;
+    const fog = useFog ? fog0 : 0;
     verts.push(p[0], p[1], p[2], other[0], other[1], other[2], side, dirSign, w, a, fog);
   };
   for (const [a, b] of segments) {
@@ -250,7 +278,7 @@ function depthRibbon(
     vertex(b, a, -1, -1);
   }
   if (verts.length < RIBBON_STRIDE * 3) return [];
-  return [{ verts, color, width: 1, ribbon: true, depth: 'test' }];
+  return [{ verts, color, width: 1, ribbon: true, depth: 'test', nudge: opts.nudge }];
 }
 
 interface RotateDrag extends GrabPoint {
@@ -260,6 +288,10 @@ interface RotateDrag extends GrabPoint {
   arcY: vec3;
   radius: number;
   frame0: { u: vec3; v: vec3; n: vec3 };
+  /** The offset from the pivot when the drag began. Each step re-clamps it
+   *  against the volume as the plane now faces, so turning back gives it back
+   *  instead of keeping whatever an earlier step had to cut. */
+  distance0: number;
   angle: number;
   /** Dash length along the arc, in radians, fixed for the whole drag: worked
    *  out every frame from the turning plane, the dashes would crawl. */
@@ -281,12 +313,21 @@ export class PlaneWidget {
   private hovering: 'ring' | 'plane' | null = null;
   /** The coloured mark under the pointer, by grid axis and angle, or null. */
   private hoverMark: { index: number; centre: number } | null = null;
+  /** Where the pointer is on the band, so the axis a drag from there would
+   *  turn about can be shown before the drag starts. */
+  private hoverGrab: vec3 | null = null;
   /**
    * How present the band is, 0 to 1. It comes up while the pointer is over the
    * image or the band, or a drag is on, and sinks away otherwise, so at rest
    * the slice is seen clean. Linear here; eased where it is drawn.
    */
   private presence = 1;
+  /**
+   * The same for the volume's bounding box, which has its own rule: it is lit
+   * only while the pointer is over the image itself, and starts fading the
+   * moment it leaves it, onto the band included.
+   */
+  private boxPresence = 1;
   private lastTick = 0;
 
   constructor(scene: Scene) {
@@ -332,6 +373,7 @@ export class PlaneWidget {
     if (this.drag) return false;
     const next = ray === null ? null : this.pick(ray) ? 'ring' : this.overPlane(ray) ? 'plane' : null;
     const mark = ray === null ? null : this.markAt(ray);
+    this.hoverGrab = ray === null ? null : this.pick(ray);
     const changed =
       next !== this.hovering ||
       (mark === null) !== (this.hoverMark === null) ||
@@ -379,21 +421,34 @@ export class PlaneWidget {
     return p * p * (3 - 2 * p);
   }
 
-  /** Show the band at full strength, to fade from there: on a new volume. */
+  /** How shown the volume's bounding box is, 0 to 1, eased. */
+  get boxShown(): number {
+    const p = this.boxPresence;
+    return p * p * (3 - 2 * p);
+  }
+
+  /** Show the band and the box at full strength, to fade from there: on a
+   *  new volume. */
   reveal(): void {
     this.presence = 1;
+    this.boxPresence = 1;
     this.lastTick = 0;
   }
 
   /** Advance the fade to time `now`; true while it still has a way to go. */
   tick(now: number): boolean {
     const target = this.drag !== null || this.hovering !== null ? 1 : 0;
+    // The hover zone is not updated during a drag, so a slide begun on the
+    // image keeps the box lit and a tilt begun on the band keeps it out.
+    const boxTarget = this.hovering === 'plane' ? 1 : 0;
     // Capped, so a frame after a long pause does not jump the whole fade.
     const dt = this.lastTick ? Math.min(0.1, (now - this.lastTick) / 1000) : 0;
     this.lastTick = now;
-    if (this.presence < target) this.presence = Math.min(target, this.presence + dt / FADE_IN_S);
-    else if (this.presence > target) this.presence = Math.max(target, this.presence - dt / FADE_OUT_S);
-    if (this.presence === target) {
+    const step = (p: number, to: number, out: number) =>
+      p < to ? Math.min(to, p + dt / FADE_IN_S) : p > to ? Math.max(to, p - dt / out) : p;
+    this.presence = step(this.presence, target, FADE_OUT_S);
+    this.boxPresence = step(this.boxPresence, boxTarget, BOX_FADE_OUT_S);
+    if (this.presence === target && this.boxPresence === boxTarget) {
       this.lastTick = 0;
       return false;
     }
@@ -403,6 +458,17 @@ export class PlaneWidget {
   clearHover(): void {
     this.hovering = null;
     this.hoverMark = null;
+    this.hoverGrab = null;
+  }
+
+  /** The tilt axis for a grab at `grab`: in the plane, through the pivot,
+   *  across the grabbed radius. Null when the grab sits on the pivot. */
+  private axisFor(grab: vec3): vec3 | null {
+    const s = this.scene;
+    const radial = vec3.sub(vec3.create(), grab, s.pivot);
+    const axis = vec3.cross(vec3.create(), radial, s.n);
+    if (vec3.length(axis) < 1e-6) return null;
+    return vec3.normalize(axis, axis);
   }
 
   /** Tilting must be grabbed on the band; sliding works anywhere on the plane. */
@@ -449,6 +515,7 @@ export class PlaneWidget {
       arcY,
       radius,
       frame0: s.frameSnapshot(),
+      distance0: s.distance,
       angle: 0,
       dashAngle,
       grabU,
@@ -470,6 +537,11 @@ export class PlaneWidget {
 
     d.angle = this.closestAngleOnArc(d, ray);
     s.rotate(d.axis, d.angle, d.frame0);
+    // The pivot stays at the volume centre, so an offset that fitted along the
+    // old normal can fall outside the volume along the new one, a long volume
+    // being the worst case. Kept inside, the plane stays on the volume, near
+    // its nearest face if need be, and is never lost.
+    s.distance = s.insideDistance(d.distance0);
   }
 
   end(): void {
@@ -481,7 +553,10 @@ export class PlaneWidget {
     const d = this.drag;
     if (!d) return;
     if (d.kind === 'translate') this.scene.setDistance(d.distance0);
-    else this.scene.rotate(d.axis, 0, d.frame0);
+    else {
+      this.scene.rotate(d.axis, 0, d.frame0);
+      this.scene.distance = d.distance0;
+    }
     this.drag = null;
   }
 
@@ -502,6 +577,49 @@ export class PlaneWidget {
    * a is the same plane half a turn away; every one of those that falls on the
    * arc is a stop.
    */
+  /**
+   * The double click on a coloured mark: a shortcut for the tilt it offers.
+   * The plane turns about the axis a drag started on that mark would use, and
+   * stops on that mark's cartesian plane, the stop the hollow marker shows,
+   * taking the nearer one if the arc passes it twice. Like a drag, it keeps
+   * the plane's offset rather than bringing it back to the centre. False when
+   * there is no such stop to turn to.
+   */
+  turnToMark(mark: { index: number; centre: number }): boolean {
+    const s = this.scene;
+    const axes = s.gridAxes();
+    if (!s.vol || !axes) return false;
+    const R = s.widgetRadius() * ((RING_INNER + RING_OUTER) / 2);
+    const grab = vec3.scaleAndAdd(vec3.create(), s.planePoint(), s.u, Math.cos(mark.centre) * R);
+    vec3.scaleAndAdd(grab, grab, s.v, Math.sin(mark.centre) * R);
+    const axis = this.axisFor(grab);
+    if (!axis) return false;
+    const radial = vec3.sub(vec3.create(), grab, s.pivot);
+    const arcX = vec3.normalize(vec3.create(), radial);
+    const probe: RotateDrag = {
+      kind: 'rotate',
+      axis,
+      arcX,
+      arcY: vec3.normalize(vec3.create(), vec3.cross(vec3.create(), axis, arcX)),
+      radius: vec3.length(radial),
+      frame0: s.frameSnapshot(),
+      distance0: s.distance,
+      angle: 0,
+      dashAngle: 0,
+      grabU: 0,
+      grabV: 0,
+    };
+    const target = axes[mark.index];
+    let best: number | null = null;
+    for (const stop of this.cartesianStops(probe)) {
+      if (Math.abs(vec3.dot(stop.axis, target)) < 0.9999) continue;
+      if (best === null || Math.abs(stop.angle) < Math.abs(best)) best = stop.angle;
+    }
+    if (best === null) return false;
+    s.animateTurn(axis, best, mark.index);
+    return true;
+  }
+
   private cartesianStops(d: RotateDrag): { angle: number; axis: vec3 }[] {
     const s = this.scene;
     const axes = s.gridAxes();
@@ -685,7 +803,63 @@ export class PlaneWidget {
       }
     }
 
+    // The axis of the turn: during a tilt, and already while the pointer is on
+    // the band, as the axis a drag from there would turn about. It is the
+    // arc's depth-cued tube, thinner and fainter: it tapers, fades and sinks
+    // into the background towards the far end, and the image and the band hide
+    // it where it passes behind them. It runs through the pivot parallel to
+    // the plane, so with the plane through the pivot it lies in the slice
+    // itself; a one-step nudge towards the camera settles that tie without
+    // lifting it over the image where it is truly behind.
+    const turnAxis =
+      d && d.kind === 'rotate'
+        ? d.axis
+        : !d && this.hovering === 'ring' && this.hoverGrab && shown > 0.002
+          ? this.axisFor(this.hoverGrab)
+          : null;
+    if (turnAxis) {
+      const reach = R * AXIS_REACH;
+      const a0 = vec3.scaleAndAdd(vec3.create(), s.pivot, turnAxis, -reach);
+      const a1 = vec3.scaleAndAdd(vec3.create(), s.pivot, turnAxis, reach);
+      const segs: [vec3, vec3][] = [];
+      const STEPS = 24;
+      for (let i = 0; i < STEPS; i++) {
+        segs.push([vec3.lerp(vec3.create(), a0, a1, i / STEPS), vec3.lerp(vec3.create(), a0, a1, (i + 1) / STEPS)]);
+      }
+      out.push(
+        ...depthRibbon(segs, forward, RING, {
+          constantWidth: AXIS_WIDTH,
+          fog: false,
+          alphaScale: AXIS_OPACITY * (d ? 1 : shown),
+          nudge: -1,
+        }),
+      );
+
+      // And the ray from the axis out to the pointer: the grabbed radius. It
+      // leaves the axis at the pivot, the axis's nearest point to the grab,
+      // and ends on the band under the pointer, or during a tilt on the point
+      // the drag holds, as it travels the arc.
+      const tip = d && d.kind === 'rotate' ? this.arcPoint(d, d.angle) : this.hoverGrab;
+      if (tip) {
+        const raySegs: [vec3, vec3][] = [];
+        for (let i = 0; i < STEPS; i++) {
+          raySegs.push([
+            vec3.lerp(vec3.create(), s.pivot, tip, i / STEPS),
+            vec3.lerp(vec3.create(), s.pivot, tip, (i + 1) / STEPS),
+          ]);
+        }
+        out.push(
+          ...depthRibbon(raySegs, forward, RING, {
+            widthScale: RAY_WIDTH,
+            alphaScale: AXIS_OPACITY * RAY_OPACITY * (d ? 1 : shown),
+            nudge: -1,
+          }),
+        );
+      }
+    }
+
     if (d && d.kind === 'rotate') {
+
       // The path the grabbed point of the ring will travel, dashed like the
       // slide rail. The arc is fixed in space from the start of the drag, and
       // so is its dash length, so the dashes stand still while the plane
