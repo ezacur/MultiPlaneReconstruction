@@ -46,8 +46,7 @@ WebGL2 y la app muestra un aviso en lugar de la imagen.
 
 ### Pasos
 
-1. Clona el repositorio. Es privado: necesitas que su propietario te invite
-   como colaborador en GitHub.
+1. Clona el repositorio:
 
    ```
    git clone https://github.com/ezacur/MultiPlaneReconstruction.git
