@@ -29,7 +29,7 @@ npm run dev
 `npm install` solo hace falta la primera vez, o cuando cambie
 `package.json`. `npm run dev` arranca el servidor de Vite y escribe su URL,
 normalmente `http://localhost:5173/`. Abrela en el navegador: la app arranca
-con el TC de craneo de ejemplo ya cargado. Cada cambio en `src/` se recarga solo
+con el TC de abdomen de ejemplo ya cargado. Cada cambio en `src/` se recarga solo
 en la pagina abierta. Para parar el servidor, `Ctrl+C` en la terminal.
 
 Si el puerto 5173 esta ocupado, Vite toma el siguiente libre y lo dice en la
@@ -87,18 +87,11 @@ El plano vive en `pivote + n * distancia`. Un plano oblicuo no es un caso
 especial: es simplemente una terna que no esta alineada con la rejilla de
 voxeles ni con los ejes del paciente.
 
-Los presets colocan la normal sobre un eje:
-
-| Grupo | Botones | Tecla | Normal |
-| --- | --- | --- | --- |
-| Rejilla de adquisicion | `J-K`, `I-K`, `I-J` | `I` `J` `K` | los ejes I, J y K del array |
-| Ejes del paciente | `Axial`, `Coronal`, `Sagital` | `A` `C` `S` | S, A y R del espacio RAS |
-
 Si el array es de I x J x K, el plano de adquisicion es `I-J`: el que recorre el
-indice K. Es el que sale por defecto, y la tecla `K` lo devuelve desde cualquier
-oblicuo.
+indice K. Es el que sale por defecto.
 
-Con el raton, **un doble clic sobre una cara de la caja del volumen** lleva el
+Todo se hace con el raton; no hay atajos de teclado. **Un doble clic sobre una
+cara de la caja del volumen** lleva el
 plano a la cartesiana paralela a esa cara. Las caras de la caja son justamente
 los planos de la rejilla, asi que la cara que se ve de frente es la que se pide.
 Al pasar el raton por encima se dibuja el contorno de la cara que se elegiria,
@@ -132,7 +125,7 @@ primeros casos, girando de mas sin cambiar nada de lo que se ve.
 A menos de un par de grados de uno de los ejes de la rejilla, la normal cae
 exactamente sobre el. Sin esto, un arrastre que simplemente pase cerca de uno
 deja el plano una fraccion de grado oblicuo y la imagen no termina de asentarse.
-El margen se ajusta en el panel y por defecto es de 2.5 grados. Fuera de ese
+El margen es de 2.5 grados (`cartesianSnapDeg` en `src/scene.ts`). Fuera de ese
 margen la normal es continua.
 
 Como el signo de la normal no cambia el corte, la comparacion va sobre el valor
@@ -159,7 +152,7 @@ con lo que se ve. Hay dos gestos:
 
 - **inclinar**: arrastrar el anillo con el boton izquierdo. Gira el plano sobre
   un eje contenido en el, que pasa por el pivote y es perpendicular al radio
-  agarrado. El punto agarrado recorre un arco visible, de -90 a +90 grados, y el
+  agarrado. El punto agarrado recorre un arco visible, de -100 a +100 grados, y el
   rayo del puntero se proyecta sobre ese arco para obtener el angulo;
 - **deslizar**: arrastrar desde la imagen, o el anillo con cualquier otro boton.
   El hueco entre la imagen y el anillo no lleva imagen, asi que un arrastre ahi
@@ -173,8 +166,17 @@ con lo que se ve. Hay dos gestos:
 El reparto es: el anillo inclina, la imagen desliza, y el vacio orbita la
 camara, tanto el de alrededor como el hueco entre la imagen y el anillo.
 
-Las dos guias del arrastre, el arco de giro y el rail de desplazamiento, se
-dibujan con profundidad real: la imagen y el propio anillo las tapan por detras.
+El anillo no esta siempre a la vista. Aparece en medio segundo cuando el raton
+pasa por la imagen o por el propio anillo, se queda mientras dura un arrastre,
+y se desvanece en dos segundos cuando el raton se va, de modo que en reposo el
+corte se ve limpio. La caja del volumen se funde con el. Al cargar un volumen
+se muestran y se desvanecen, para que se vea que estan.
+
+Las dos guias del arrastre, el arco de giro y el rail de desplazamiento, son
+discontinuas y con trazos de la misma longitud en el espacio: la del rail, que
+divide su recorrido en 48 tramos. Las dos quedan fijas en el espacio desde el
+principio del gesto, trazos incluidos, asi que no se mueven mientras el plano
+gira o se desliza. Se dibujan con profundidad real: la imagen y el propio anillo las tapan por detras.
 Ademas son cintas en espacio de pantalla **sombreadas como cilindros**. El
 fragment shader reconstruye la normal de un tubo visto de lado a partir de la
 posicion transversal del pixel, lo ilumina con una luz fija ligeramente por
@@ -204,8 +206,9 @@ interseccion parpadea al girar.
 
 ### Donde coger el anillo para llegar a una cartesiana
 
-Sobre el anillo hay unos tramos tenues, del color del plano al que llevan
-(rojo I, verde J, azul K): agarrandolo dentro de uno, el giro puede caer en ese
+Sobre el borde exterior del anillo, del radio 0.97 al 1, hay unos tramos
+tenues del color del plano al que llevan (rojo I, verde J, azul K): agarrandolo
+dentro de uno, el giro puede caer en ese
 plano de la rejilla. Cada eje sale dos veces, en lados opuestos, porque cada
 lado inclina hacia el mismo plano en un sentido distinto, y el eje sobre el que
 ya esta el plano no sale. El ancho es la ventana real con el snap: agarrando el
@@ -232,22 +235,25 @@ hacia A) sale **verde** y el `J-K` (normal I, hacia R) sale **rojo**.
 
 El grosor del borde dice otra cosa: es fino mientras el plano esta oblicuo y se
 engorda en cuanto cae sobre una de las cartesianas de la rejilla, con una
-tolerancia de un grado. Se comprueba sobre la geometria y no sobre el preset
-activo, asi que un giro libre que acierte a caer en una de ellas tambien
-engorda.
+tolerancia de un grado. Se comprueba sobre la geometria, asi que un giro libre
+que acierte a caer en una de ellas tambien engorda. Oblicuo, el trazo es de
+medio pixel: un pixel a media opacidad, porque WebGL no pinta mas fino.
 
 ## La barra de grises
 
-Flotando en la esquina inferior derecha de la vista hay una barra vertical al
-estilo de `icolorbar_demo.html`, en escala de grises. La barra **es** la funcion de transferencia: negro por debajo del
-limite inferior, la rampa entre los dos, blanco por encima del superior. A su
-izquierda, un histograma del volumen, de solo lectura, dice donde esta el dato
-de verdad, para poder colocar la ventana sobre el tejido en vez de adivinarla
-con dos numeros.
+Flotando en la esquina inferior derecha de la vista hay una barra horizontal al
+estilo de `icolorbar_demo.html`, puesto de lado: los valores crecen de
+izquierda a derecha. No lleva panel ni borde detras; su texto lleva un halo
+oscuro para leerse sobre la escena. La barra **es** la funcion de
+transferencia: negro por debajo del limite inferior, la rampa entre los dos,
+blanco por encima del superior. Encima, un histograma del volumen, de solo
+lectura, dice donde esta el dato de verdad, para poder colocar la ventana sobre
+el tejido en vez de adivinarla con dos numeros. Debajo van los ticks, con las
+cajas de los limites como primero y ultimo.
 
 Al cargar un volumen la ventana abarca todo el rango del dato, del percentil 0
-al 100, como en el demo. El boton **Auto** del panel la lleva al rango robusto,
-de los percentiles 0.5 a 99.5, que recorta los pocos voxeles extremos.
+al 100, como en el demo. Desde ahi se ajusta en la propia barra, o con Ctrl +
+arrastrar sobre la vista.
 
 Tres detalles del demo son los que hacen que se lea de un vistazo:
 
@@ -256,9 +262,10 @@ Tres detalles del demo son los que hacen que se lea de un vistazo:
   ventana, sin necesidad de leer dos cifras;
 - el **eje vive dentro de la ventana**. Fuera de los limites no hay ticks, y el
   primero y el ultimo de la escala son las propias cajas de los limites, con
-  rayita mas gruesa y cifra mas grande. Un tick que caiga a menos de 13 pixeles
-  de una caja se descarta para que no se pisen;
-- dos **marcas del rango del dato** en el borde izquierdo de la barra dicen donde
+  rayita mas gruesa y cifra mas grande. Un tick que caiga a menos de 42 pixeles
+  de una caja se descarta para que no se pisen: las cajas van centradas en su
+  limite y miden lo que un numero de cinco cifras;
+- dos **marcas del rango del dato** en el borde superior de la barra dicen donde
   hay dato de verdad, frente al margen del dominio o a un limite estirado.
 
 Las barras del histograma se escalan contra el percentil 92 de los recuentos por
@@ -278,7 +285,7 @@ su forma.
 | Ctrl | Saca las guias de percentiles y el iman se pega a ellas |
 | Clic derecho en una cola saturada | Elige el color de esa saturacion |
 | Escribir en la caja de un limite | Lo fija a ese valor |
-| Boton de la esquina | Pliega y despliega el histograma, con animacion |
+| Boton junto al extremo derecho de la barra (˅ / ˄) | Pliega el histograma sobre la barra y lo despliega, con animacion |
 | Pasar por la barra | La aguja marca el valor de ese nivel |
 | Shift, sobre la barra o el corte | Dibuja sobre el corte la linea de nivel de ese valor |
 | Shift + clic | La deja fijada, con su marca en la barra |
@@ -290,12 +297,12 @@ escala, en el mismo sitio y con la misma rayita que los demas, pero se puede
 teclear en ellas. Un render de fondo nunca pisa la que se esta editando.
 
 Junto a cada limite va el percentil del dato que deja por debajo. Fuera del
-rango del dato no hay percentil que dar, asi que dice `▲ out` o `▼ out` segun
+rango del dato no hay percentil que dar, asi que dice `◀ out` o `out ▶` segun
 por donde se haya salido.
 
 Con **Ctrl** pulsado aparecen las paradas del iman, en los percentiles 0, 2, 5,
 10, 25, 50, 75, 90, 95, 98 y 100, cada una con su tick y su cifra. Las cifras se
-colocan con antisolape: primero 0, 50 y 100, luego el resto si dejan 13 pixeles
+colocan con antisolape: primero 0, 50 y 100, luego el resto si dejan 30 pixeles
 libres; la parada que no quepa se queda con su tick sin numero. Mientras Ctrl
 sigue pulsado, arrastrar un limite lo pega a la parada mas cercana. Los
 cuantiles salen de un histograma de 4096 bins con interpolacion dentro del bin,
@@ -328,8 +335,14 @@ Dos ideas del demo son las que la hacen usable:
   tirador se vuelve a enganchar cuando el cursor pasa por su altura.
 
 El cuerpo de la barra no arrastra nada: el desplazamiento de los dos limites
-vive en el tercio central de la columna de las cifras, donde el cursor se
-vuelve una mano, para dejar libre junto a cada limite su caja editable.
+vive en el tercio central de la fila de las cifras, donde el cursor se vuelve
+una mano, para dejar libre junto a cada limite su caja editable.
+
+La ventana tambien se cambia desde la vista, con Ctrl + arrastrar. Entonces la
+barra hace lo mismo que con un arrastre propio: congela su escala durante el
+gesto, de modo que los limites se mueven sobre una escala quieta, y al soltar
+la anima hasta el encuadre de los limites finales. Solo se abre a mitad de
+gesto si un limite se sale de ella, para que su tirador no abandone la barra.
 
 Junto a cada limite van su valor y el porcentaje de voxeles que satura por ese
 lado. La aguja naranja marca el valor de la sonda, es decir el punto del corte
@@ -341,7 +354,7 @@ Como en el demo, el raton siempre senala un nivel: sobre la barra, el de esa
 altura; sobre el corte, el valor bajo el cursor. La aguja lo marca en la barra.
 Con **Shift** pulsado, ese nivel se dibuja ademas como una linea de nivel sobre
 la imagen, y **Shift + clic**, en la barra o en el corte, la deja fijada. Caben
-ocho fijadas. Cada una lleva una marca en la mitad derecha de la barra con su
+ocho fijadas. Cada una lleva una marca en la mitad superior de la barra con su
 valor; pasar por ella la resalta en naranja tambien sobre la imagen, y el clic
 derecho la borra. Las fijadas son del volumen en que se leyeron: al cargar otro
 se van.
@@ -373,8 +386,8 @@ dos nodos que empujan los grises medios hacia el extremo claro.
 Del demo quedan fuera, a proposito, el dialogo de niveles discretos, el
 conmutador de ganancia exponencial del arrastre y la linea de pistas
 contextuales; el resto si esta. Los saltos discretos de los limites, como un
-valor tecleado, el doble clic en un tirador o los presets de ventana del panel,
-se deslizan con el mismo easing que en el demo.
+valor tecleado o el doble clic en un tirador, se deslizan con el mismo easing
+que en el demo.
 
 ## Controles
 
@@ -391,21 +404,33 @@ se deslizan con el mismo easing que en el demo.
 | Ir a un plano cartesiano | Doble clic en una cara de la caja del volumen |
 | Ventana / nivel | Ctrl + arrastrar, o boton central fuera del plano |
 | Reencuadrar la camara | Doble clic fuera de la caja |
+| Mirar a lo largo de un eje | Clic en la letra R, A o S del marcador de ejes |
+| Mirar el corte de frente | Doble clic derecho sobre la imagen |
 | Cancelar el arrastre | Esc |
 
 El reparto es espacial: sobre lo que el plano dibuja el raton manda sobre el
 plano, y sobre el vacio manda sobre la camara.
 
-**Teclas**
-
-| Tecla | Accion |
-| --- | --- |
-| `I` `J` `K` | planos de la rejilla con normal I, J y K, con transicion animada |
-| `A` `C` `S` | axial, coronal y sagital, con transicion animada |
-| `F` | reencuadrar la camara |
+No hay atajos de teclado. Las teclas que quedan son modificadores de gestos de
+raton: Shift para las lineas de nivel, Ctrl para ventana / nivel y para el iman
+de percentiles, Alt para el ajuste fino de la barra, y Esc para deshacer el
+arrastre en curso.
 
 En la esquina inferior izquierda hay un marcador de ejes R/A/S que sigue a la
-camara. Es lo que dice hacia donde mira el paciente ahora que no hay vista 2D.
+camara y dice hacia donde mira el paciente. Es tambien un control: un clic en
+una letra gira la camara, con transicion animada, hasta mirar a lo largo de ese
+eje con el apuntando al espectador, es decir desde la derecha, desde delante o
+desde arriba; otro clic en la misma letra la lleva al lado opuesto. Desde
+arriba y desde abajo la vista deja A hacia arriba y R a la derecha. Arriba y
+abajo se quedan a 86 grados, el tope de la orbita, porque la camara mantiene S
+como su arriba y en el polo no tendria derecha.
+
+El panel lateral se queda con lo minimo: el volumen de ejemplo y abrir uno
+propio, los datos del volumen cargado y la ayuda de los gestos. La ventana se
+lleva entera desde la barra de grises, y el valor bajo el raton se lee en su
+aguja. El corte es siempre fino: espesor cero y proyeccion media, que con un
+solo punto es el valor interpolado trilinealmente. El shader conserva el slab
+(MIP, media y MinIP) por si vuelve a hacer falta.
 
 Tambien acepta ficheros propios: el selector del panel, o arrastrar un `.nii` /
 `.nii.gz` sobre las vistas.
@@ -427,10 +452,10 @@ En `public/data`, descargados de
 | Fichero | Responsabilidad |
 | --- | --- |
 | `src/nifti.ts` | Lee la cabecera y los datos, aplica `scl_slope`/`scl_inter`, y expone la affine voxel a mundo. |
-| `src/scene.ts` | El plano, el pivote, los presets cartesianos, las transiciones animadas, el color direccional, el recorte del plano contra el volumen, la camara 3D, el marcador de ejes y el lanzado de rayos. |
+| `src/scene.ts` | El plano, el pivote, los planos cartesianos, las transiciones animadas del plano y de la camara, el color direccional, el recorte del plano contra el volumen, la camara 3D, el marcador de ejes y el lanzado de rayos. |
 | `src/widget.ts` | El manipulador: el anillo, el ciclo del arrastre y la geometria de las guias. |
 | `src/renderer.ts` | WebGL2: textura 3D, shader de reslice, la vista y el dibujo de lineas. |
-| `src/interact.ts` | Raton, rueda y teclado. |
+| `src/interact.ts` | Raton, rueda y la tecla Esc. |
 | `src/quantise.ts` | El snap de la normal a los ejes cartesianos de la rejilla. |
 | `src/colorbar.ts` | La barra de grises: histograma, limites arrastrables, ticks y aguja. |
 | `src/main.ts` | Panel, carga de ficheros y bucle de dibujo. |
@@ -465,3 +490,7 @@ node tools/niftiinfo.mjs public/data/CT_pitch.nii.gz
   que el fragment shader sombrea como tubos.
 - La camara es ortografica, asi que las aristas paralelas del volumen se ven
   paralelas y el zoom cambia la escala, no la distancia.
+- El doble clic derecho no existe en el navegador: se detecta a mano, con dos
+  pulsaciones del boton derecho a menos de 400 ms y 6 pixeles. Pone la camara
+  mirando a lo largo de la normal del corte desde el lado que ya se veia, con la
+  misma transicion que el marcador de ejes.

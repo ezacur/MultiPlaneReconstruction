@@ -51,15 +51,22 @@ export interface LineBatch {
   nudge?: number;
 }
 
-/** How far round the arc a single grab can tilt the plane. */
-const ARC_MIN = -Math.PI / 2;
-const ARC_MAX = Math.PI / 2;
+/** How far round the arc a single grab can tilt the plane: 100 degrees each
+ *  way, a little past the quarter turn so a plane can be carried through it. */
+const ARC_MIN = (-100 * Math.PI) / 180;
+const ARC_MAX = (100 * Math.PI) / 180;
 /** The grab band, as fractions of the widget radius. */
 const RING_INNER = 0.85;
 /** Depth offset of the band against the slice it lies on, see LineBatch.nudge. */
 const RING_NUDGE_REST = 2;
 const RING_NUDGE_ENGAGED = -1;
+/** The band fades in over this long once the pointer is over the image... */
+const FADE_IN_S = 0.5;
+/** ...and out over this long once it has left. */
+const FADE_OUT_S = 2;
 const RING_OUTER = 1.0;
+/** The coloured grab windows run only along the band's outer rim. */
+const WINDOW_INNER = 0.97;
 
 const RING: [number, number, number] = [0.85, 0.87, 0.92];
 const RAIL: [number, number, number] = [0.55, 0.58, 0.66];
@@ -85,6 +92,9 @@ function pushSeg(out: number[], a: vec3, b: vec3): void {
 }
 
 const SEGMENTS = 128;
+/** The slide rail is cut into this many steps, alternately dash and gap; the
+ *  tilt arc borrows the same dash length. */
+const RAIL_STEPS = 48;
 
 function ringPoint(
   centre: vec3,
@@ -236,6 +246,9 @@ interface RotateDrag extends GrabPoint {
   radius: number;
   frame0: { u: vec3; v: vec3; n: vec3 };
   angle: number;
+  /** Dash length along the arc, in radians, fixed for the whole drag: worked
+   *  out every frame from the turning plane, the dashes would crawl. */
+  dashAngle: number;
 }
 
 interface TranslateDrag extends GrabPoint {
@@ -251,6 +264,13 @@ export class PlaneWidget {
   private scene: Scene;
   private drag: DragState | null = null;
   private hovering: 'ring' | 'plane' | null = null;
+  /**
+   * How present the band is, 0 to 1. It comes up while the pointer is over the
+   * image or the band, or a drag is on, and sinks away otherwise, so at rest
+   * the slice is seen clean. Linear here; eased where it is drawn.
+   */
+  private presence = 1;
+  private lastTick = 0;
 
   constructor(scene: Scene) {
     this.scene = scene;
@@ -299,6 +319,36 @@ export class PlaneWidget {
     return changed;
   }
 
+  /**
+   * How shown the fading parts are, 0 to 1, eased: the band, and with it the
+   * volume's bounding box, which the renderer fades along.
+   */
+  get shown(): number {
+    const p = this.presence;
+    return p * p * (3 - 2 * p);
+  }
+
+  /** Show the band at full strength, to fade from there: on a new volume. */
+  reveal(): void {
+    this.presence = 1;
+    this.lastTick = 0;
+  }
+
+  /** Advance the fade to time `now`; true while it still has a way to go. */
+  tick(now: number): boolean {
+    const target = this.drag !== null || this.hovering !== null ? 1 : 0;
+    // Capped, so a frame after a long pause does not jump the whole fade.
+    const dt = this.lastTick ? Math.min(0.1, (now - this.lastTick) / 1000) : 0;
+    this.lastTick = now;
+    if (this.presence < target) this.presence = Math.min(target, this.presence + dt / FADE_IN_S);
+    else if (this.presence > target) this.presence = Math.max(target, this.presence - dt / FADE_OUT_S);
+    if (this.presence === target) {
+      this.lastTick = 0;
+      return false;
+    }
+    return true;
+  }
+
   clearHover(): void {
     this.hovering = null;
   }
@@ -334,14 +384,21 @@ export class PlaneWidget {
     vec3.normalize(axis, axis);
     const arcX = vec3.normalize(vec3.create(), radial);
     const arcY = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), axis, arcX));
+    // Dashes of the same length in space as the slide rail's, so the two
+    // guides read as one family; at least four of them on the arc.
+    const radius = vec3.length(radial);
+    const [lo, hi] = s.distanceRange();
+    const dash = Math.max((hi - lo) / RAIL_STEPS, 1e-6);
+    const dashAngle = Math.min((ARC_MAX - ARC_MIN) / 8, dash / Math.max(radius, 1e-6));
     this.drag = {
       kind: 'rotate',
       axis,
       arcX,
       arcY,
-      radius: vec3.length(radial),
+      radius,
       frame0: s.frameSnapshot(),
       angle: 0,
+      dashAngle,
       grabU,
       grabV,
     };
@@ -390,7 +447,8 @@ export class PlaneWidget {
    * Against a grid axis a that is A cos t + B sin t, closest at atan2(B, A),
    * where it is sqrt(A^2 + B^2) off. The stop counts when that is inside the
    * snap, which is what will pull the normal exactly onto a; the other sign of
-   * a is the same plane half a turn away, so t is folded into the arc's range.
+   * a is the same plane half a turn away; every one of those that falls on the
+   * arc is a stop.
    */
   private cartesianStops(d: RotateDrag): { angle: number; axis: vec3 }[] {
     const s = this.scene;
@@ -407,10 +465,13 @@ export class PlaneWidget {
       const A = vec3.dot(a, n0);
       const B = vec3.dot(a, w);
       if (Math.hypot(A, B) <= minCos) continue;
-      let t = Math.atan2(B, A);
-      if (t > ARC_MAX) t -= Math.PI;
-      else if (t <= ARC_MIN) t += Math.PI;
-      if (t >= ARC_MIN && t <= ARC_MAX) out.push({ angle: t, axis: a });
+      // The other sign of a is the same plane half a turn on. The arc spans
+      // more than half a turn, so near its ends a plane can be on it twice.
+      const t = Math.atan2(B, A);
+      for (const k of [-2, -1, 0, 1, 2]) {
+        const tk = t + k * Math.PI;
+        if (tk >= ARC_MIN && tk <= ARC_MAX) out.push({ angle: tk, axis: a });
+      }
     }
     return out;
   }
@@ -489,19 +550,24 @@ export class PlaneWidget {
     const s = this.scene;
     if (!s.vol) return [];
     const out: LineBatch[] = [];
-    const engaged = this.drag !== null || this.hovering !== null;
+    // Engaged is the band itself under the pointer, or held: then it is
+    // highlighted and comes in front of the image. Over the image only, it
+    // is merely shown.
+    const engaged = this.drag !== null || this.hovering === 'ring';
+    const shown = this.shown;
     const centre = s.planePoint();
     const R = s.widgetRadius();
 
     // The handle is a translucent band with no outline, so there is something
-    // to aim at without drawing a hard edge over the scene.
+    // to aim at without drawing a hard edge over the scene. Faded right out
+    // it is not drawn at all, and so writes no depth either.
     const bandFill: number[] = [];
-    band(bandFill, centre, s.u, s.v, R * RING_INNER, R * RING_OUTER);
+    if (shown > 0.002) band(bandFill, centre, s.u, s.v, R * RING_INNER, R * RING_OUTER);
     out.push({
       verts: bandFill,
       color: RING,
       width: 1,
-      alpha: engaged ? 0.55 : 0.25,
+      alpha: (engaged ? 0.2 : 0.07) * shown,
       strip: true,
       // Writing depth is what lets the band occlude the guide curve behind it.
       depth: 'write',
@@ -519,15 +585,15 @@ export class PlaneWidget {
     // where grabbing it starts a tilt that can land on a grid plane. They are
     // worked out from the plane as it is now, so during a drag they follow
     // the turn frame by frame.
-    {
+    if (shown > 0.002) {
       for (const w of this.grabWindows()) {
         const fill: number[] = [];
-        arcBand(fill, centre, s.u, s.v, R * RING_INNER, R * RING_OUTER, w.centre - w.half, w.centre + w.half);
+        arcBand(fill, centre, s.u, s.v, R * WINDOW_INNER, R * RING_OUTER, w.centre - w.half, w.centre + w.half);
         out.push({
           verts: fill,
           color: directionColor(w.axis),
           width: 1,
-          alpha: engaged ? 0.5 : 0.28,
+          alpha: (engaged ? 0.5 : 0.28) * shown,
           strip: true,
           // One step nearer than the band, so they sit on it, and on the same
           // side of the image as it: under the image at rest, over it engaged.
@@ -538,14 +604,21 @@ export class PlaneWidget {
     }
 
     if (d && d.kind === 'rotate') {
-      // The path the grabbed point of the ring will travel.
+      // The path the grabbed point of the ring will travel, dashed like the
+      // slide rail. The arc is fixed in space from the start of the drag, and
+      // so is its dash length, so the dashes stand still while the plane
+      // turns. Each dash is a few chords, to follow the curve.
+      const dashAngle = d.dashAngle;
       const segs: [vec3, vec3][] = [];
-      const N = 96;
-      let prev = this.arcPoint(d, ARC_MIN);
-      for (let i = 1; i <= N; i++) {
-        const next = this.arcPoint(d, ARC_MIN + ((ARC_MAX - ARC_MIN) * i) / N);
-        segs.push([prev, next]);
-        prev = next;
+      const SUB = 3;
+      for (let a0 = ARC_MIN; a0 < ARC_MAX; a0 += 2 * dashAngle) {
+        const a1 = Math.min(ARC_MAX, a0 + dashAngle);
+        let prev = this.arcPoint(d, a0);
+        for (let k = 1; k <= SUB; k++) {
+          const next = this.arcPoint(d, a0 + ((a1 - a0) * k) / SUB);
+          segs.push([prev, next]);
+          prev = next;
+        }
       }
       out.push(...depthRibbon(segs, forward, RING));
 
@@ -571,11 +644,10 @@ export class PlaneWidget {
       const base = vec3.scaleAndAdd(vec3.create(), d.grab, d.normal0, lo - d.distance0);
       const top = vec3.scaleAndAdd(vec3.create(), d.grab, d.normal0, hi - d.distance0);
       const segs: [vec3, vec3][] = [];
-      const STEPS = 48;
-      for (let i = 0; i < STEPS; i += 2) {
+      for (let i = 0; i < RAIL_STEPS; i += 2) {
         segs.push([
-          vec3.lerp(vec3.create(), base, top, i / STEPS),
-          vec3.lerp(vec3.create(), base, top, (i + 1) / STEPS),
+          vec3.lerp(vec3.create(), base, top, i / RAIL_STEPS),
+          vec3.lerp(vec3.create(), base, top, (i + 1) / RAIL_STEPS),
         ]);
       }
       out.push(...depthRibbon(segs, forward, RAIL));

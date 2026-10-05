@@ -652,8 +652,11 @@ export class Renderer {
       discardOutside: true,
     });
 
+    // The bounding box fades in and out with the ring: both are scaffolding
+    // around the slice, shown while the pointer is on it.
     const c = scene.corners();
-    if (c.length === 8) {
+    const boxAlpha = BOX_ALPHA * widget.shown;
+    if (c.length === 8 && boxAlpha > 0.002) {
       // corners() enumerates i fastest, then j, then k.
       const edges = [
         [0, 1], [2, 3], [4, 5], [6, 7],
@@ -662,7 +665,7 @@ export class Renderer {
       ];
       const verts: number[] = [];
       for (const [a, b] of edges) verts.push(c[a][0], c[a][1], c[a][2], c[b][0], c[b][1], c[b][2]);
-      this.drawLines(verts, BOX_RGB, mvp, 1, BOX_ALPHA, false, 'test');
+      this.drawLines(verts, BOX_RGB, mvp, 1, boxAlpha, false, 'test');
     }
 
     // The box face under the pointer, which a double click snaps the plane onto.

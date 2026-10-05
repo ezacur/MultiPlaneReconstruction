@@ -76,6 +76,25 @@ interface Transition {
 /** Default length of a plane transition, in milliseconds. */
 export const TRANSITION_MS = 420;
 
+/** How far the orbit can tilt up or down, in radians: short of the pole,
+ *  where a camera that keeps S as its up has no defined right. */
+export const ELEVATION_LIMIT = 1.5;
+
+/** An in-flight swing of the camera. */
+interface CameraMove {
+  az0: number;
+  az1: number;
+  el0: number;
+  el1: number;
+  start: number;
+  duration: number;
+}
+
+/** An angle brought into (-pi, pi]. */
+function wrapAngle(a: number): number {
+  return Math.atan2(Math.sin(a), Math.cos(a));
+}
+
 const RAS_LETTERS: ReadonlyArray<readonly [string, string]> = [
   ['L', 'R'],
   ['P', 'A'],
@@ -136,8 +155,13 @@ export class Scene {
   windowWidth = 400;
   windowLevel = 40;
 
+  /**
+   * Thickness of the slice, and how a thick one is projected. The viewer
+   * keeps it thin and on the mean: with no thickness the mean of the one
+   * sample is the sample itself, trilinearly interpolated.
+   */
   slabMm = 0;
-  slabMode: SlabMode = 0;
+  slabMode: SlabMode = 1;
 
   /**
    * Saturation colours. When set, voxels the window clips are painted in these
@@ -175,6 +199,7 @@ export class Scene {
   preset: { space: PlaneSpace; axis: number } | null = null;
 
   private transition: Transition | null = null;
+  private cameraMove: CameraMove | null = null;
 
   setVolume(vol: Volume): void {
     this.vol = vol;
@@ -632,7 +657,79 @@ export class Scene {
   // ---- 3D camera and picking ----------------------------------------------
 
   resetCamera(): void {
+    this.cameraMove = null;
     this.camera = { azimuth: -0.7, elevation: 0.62, zoom: 1.15 };
+  }
+
+  /**
+   * Swing the camera round to look along a world axis, with that axis
+   * pointing at the viewer: R, A or S for 0, 1 or 2. Asked again once there,
+   * it goes round to the opposite side, L, P or I. Straight up and down stop at
+   * the orbit's own elevation limit, since the camera keeps S as its up, and
+   * face A up the screen.
+   */
+  viewAlongAxis(axis: number, duration = TRANSITION_MS): void {
+    const { azimuth: az, elevation: el } = this.camera;
+    const views: [number, number][][] = [
+      [[Math.PI / 2, 0], [-Math.PI / 2, 0]],
+      [[Math.PI, 0], [0, 0]],
+      // From above or below, with A up the screen and R to the right.
+      [[0, ELEVATION_LIMIT], [0, -ELEVATION_LIMIT]],
+    ];
+    const [plus, minus] = views[axis];
+    const at = (v: [number, number]) =>
+      Math.abs(wrapAngle(az - v[0])) < 1e-3 && Math.abs(el - v[1]) < 1e-3;
+    const [az1, el1] = at(plus) ? minus : plus;
+    this.swingCamera(az1, el1, duration);
+  }
+
+  /**
+   * Swing the camera round to face the slice square on, looking along its
+   * normal, from whichever side of it is in view now so the image does not
+   * turn its back.
+   */
+  facePlane(duration = TRANSITION_MS): void {
+    const { forward } = this.cameraBasis();
+    // The eye looks along `forward`, so it sits on the side opposite to it.
+    const toward = vec3.dot(this.n, forward) > 0 ? -1 : 1;
+    const d = vec3.scale(vec3.create(), this.n, toward);
+    const el = Math.max(-ELEVATION_LIMIT, Math.min(ELEVATION_LIMIT, Math.asin(Math.max(-1, Math.min(1, d[2])))));
+    // Straight up or down the azimuth is free: keep the current one.
+    const az = Math.hypot(d[0], d[1]) > 1e-6 ? Math.atan2(d[0], -d[1]) : this.camera.azimuth;
+    this.swingCamera(az, el, duration);
+  }
+
+  /** Animate the orbit to an azimuth and elevation, the short way round. */
+  private swingCamera(az1: number, el1: number, duration: number): void {
+    const { azimuth: az, elevation: el } = this.camera;
+    const target = az + wrapAngle(az1 - az);
+    if (duration <= 0) {
+      this.cameraMove = null;
+      this.camera.azimuth = target;
+      this.camera.elevation = el1;
+      return;
+    }
+    this.cameraMove = { az0: az, az1: target, el0: el, el1, start: performance.now(), duration };
+  }
+
+  /** Drop a camera swing in progress, for a gesture that takes the camera over. */
+  stopCameraMove(): void {
+    this.cameraMove = null;
+  }
+
+  /** Advance the camera swing to time `now`; true while it is still running. */
+  tickCamera(now: number): boolean {
+    const m = this.cameraMove;
+    if (!m) return false;
+    const raw = Math.min(1, Math.max(0, (now - m.start) / m.duration));
+    const s = raw < 0.5 ? 4 * raw * raw * raw : 1 - Math.pow(-2 * raw + 2, 3) / 2;
+    this.camera.azimuth = m.az0 + (m.az1 - m.az0) * s;
+    this.camera.elevation = m.el0 + (m.el1 - m.el0) * s;
+    if (raw >= 1) {
+      this.cameraMove = null;
+      return false;
+    }
+    return true;
   }
 
   /** Camera axes in world coordinates: screen right, screen up, and forward. */

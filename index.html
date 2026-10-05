@@ -22,52 +22,6 @@
         </section>
 
         <section>
-          <h2>Plano</h2>
-          <div class="sub">Rejilla de adquisicion</div>
-          <div class="row" id="grid-presets"></div>
-          <div class="sub">Ejes del paciente</div>
-          <div class="row" id="world-presets"></div>
-          <div class="row">
-            <button id="reset-camera" title="Devuelve la camara a su encuadre inicial">Reencuadrar camara</button>
-          </div>
-          <div id="plane-info" class="mono"></div>
-          <div class="sub">El borde de la imagen toma el color de la normal:
-            rojo el eje X (R/L), verde el Y (A/P), azul el Z (S/I).</div>
-        </section>
-
-        <section>
-          <h2>Ventana / nivel</h2>
-          <div id="wl-info" class="mono"></div>
-          <div id="wl-presets" class="row wrap"></div>
-        </section>
-
-        <section>
-          <h2>Snap a la cartesiana</h2>
-          <label>Margen <span id="snap-val" class="val"></span>
-            <input type="range" id="snap" min="0" max="15" step="0.5" value="2.5" />
-          </label>
-        </section>
-
-        <section>
-          <h2>Grosor de corte</h2>
-          <label>Espesor <span id="slab-val" class="val"></span>
-            <input type="range" id="slab" min="0" max="50" step="0.5" value="0" />
-          </label>
-          <label>Proyeccion
-            <select id="slab-mode">
-              <option value="0">MIP (maximo)</option>
-              <option value="1">Media</option>
-              <option value="2">MinIP (minimo)</option>
-            </select>
-          </label>
-        </section>
-
-        <section>
-          <h2>Sonda</h2>
-          <div id="probe-info" class="mono"></div>
-        </section>
-
-        <section>
           <h2>Volumen</h2>
           <div id="vol-info" class="mono"></div>
         </section>
@@ -75,26 +29,27 @@
         <section class="help">
           <h2>Raton</h2>
           <ul>
-            <li><b>Anillo, boton izquierdo</b>: inclinar el plano</li>
+            <li><b>Anillo, boton izquierdo</b>: inclinar el plano. Los tramos
+              de color del anillo marcan desde donde el giro llega a un plano
+              cartesiano</li>
             <li><b>Imagen del corte</b>: deslizar por la normal</li>
-            <li><b>Anillo, boton central</b>: deslizar tambien</li>
             <li><b>Espacio vacio</b>: orbitar la camara</li>
             <li><b>Rueda</b>: sobre el plano cambia de corte, fuera acerca</li>
             <li><b>Doble clic en una cara de la caja</b>: lleva el plano a ese
-              plano cartesiano de la rejilla, con transicion animada</li>
+              plano cartesiano de la rejilla</li>
+            <li><b>Doble clic fuera de la caja</b>: reencuadrar la camara</li>
+            <li><b>Doble clic derecho en la imagen</b>: mirar el corte de
+              frente</li>
+            <li><b>Clic en un eje del marcador R/A/S</b>: mirar desde ese lado;
+              otra vez, desde el opuesto</li>
             <li><b>Ctrl + arrastrar</b>: ventana / nivel</li>
             <li><b>Barra de grises</b>: arrastrar los limites; el tercio
               central de las cifras desplaza los dos. Rueda sobre la barra
               ensancha alrededor del cursor. Doble clic en un limite lo lleva
               al extremo del dato, y en la barra pone un nodo. Alt afina</li>
-            <li><b>Doble clic fuera de la caja</b>: reencuadrar la camara</li>
+            <li><b>Shift</b>, sobre la barra o el corte: linea de nivel de ese
+              valor. <b>Shift + clic</b> la fija</li>
             <li><b>Esc</b>: cancelar el arrastre en curso</li>
-          </ul>
-          <h2>Teclas</h2>
-          <ul>
-            <li><b>I J K</b>: planos de la rejilla, con transicion animada</li>
-            <li><b>A C S</b>: axial, coronal, sagital</li>
-            <li><b>F</b>: reencuadrar la camara</li>
           </ul>
         </section>
       </aside>

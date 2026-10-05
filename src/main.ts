@@ -8,10 +8,8 @@ import {
   directionLabel,
   GRID_AXIS_NAMES,
   Scene,
-  WORLD_PLANE_NAMES,
   type BoxFace,
   type PlaneSpace,
-  type SlabMode,
 } from './scene';
 import { PlaneWidget } from './widget';
 
@@ -20,13 +18,8 @@ const SAMPLES = [
   { file: 'CT_Abdo.nii.gz', label: 'TC abdomen' },
   { file: 'mni152.nii.gz', label: 'RM cerebro (plantilla MNI152)' },
 ];
-
-const WL_PRESETS_CT = [
-  { label: 'Abdomen', w: 400, l: 50 },
-  { label: 'Pulmon', w: 1500, l: -600 },
-  { label: 'Hueso', w: 1800, l: 400 },
-  { label: 'Cerebro', w: 80, l: 40 },
-];
+/** The volume loaded on start. */
+const DEFAULT_SAMPLE = 'CT_Abdo.nii.gz';
 
 const $ = <T extends HTMLElement>(sel: string): T => {
   const el = document.querySelector<T>(sel);
@@ -38,8 +31,6 @@ const canvas = $<HTMLCanvasElement>('#gl');
 const viewsRoot = $<HTMLElement>('#views');
 const pane = $<HTMLElement>('#pane-3d');
 const statusEl = $<HTMLElement>('#status');
-const planeEl = $<HTMLElement>('#plane-info');
-const probeEl = $<HTMLElement>('#probe-info');
 const volEl = $<HTMLElement>('#vol-info');
 const hintEl = $<HTMLElement>('#hint-3d');
 const titleEl = pane.querySelector<HTMLElement>('.title')!;
@@ -51,16 +42,6 @@ const axisEls = ['R', 'A', 'S'].map((k, i) => {
 });
 const sampleSel = $<HTMLSelectElement>('#sample');
 const fileInput = $<HTMLInputElement>('#file');
-const wlInfo = $<HTMLElement>('#wl-info');
-const snapSlider = $<HTMLInputElement>('#snap');
-const snapVal = $<HTMLElement>('#snap-val');
-const slabSlider = $<HTMLInputElement>('#slab');
-const slabVal = $<HTMLElement>('#slab-val');
-const slabModeSel = $<HTMLSelectElement>('#slab-mode');
-const wlPresetsEl = $<HTMLElement>('#wl-presets');
-const gridPresetsEl = $<HTMLElement>('#grid-presets');
-const worldPresetsEl = $<HTMLElement>('#world-presets');
-const btnResetCamera = $<HTMLButtonElement>('#reset-camera');
 
 const scene = new Scene();
 const widget = new PlaneWidget(scene);
@@ -116,8 +97,12 @@ function requestRender(): void {
   pending = true;
   requestAnimationFrame((now) => {
     pending = false;
-    // A plane transition needs frames back to back until it settles.
-    const animating = scene.tickTransition(now);
+    // A plane transition or a camera swing needs frames back to back until it
+    // settles. Both are ticked: neither may be skipped by the other.
+    const plane = scene.tickTransition(now);
+    const camera = scene.tickCamera(now);
+    const ring = widget.tick(now);
+    const animating = plane || camera || ring;
     renderer.render(scene, widget, paneRect(), faceHover);
     updateOverlays();
     if (animating) requestRender();
@@ -128,44 +113,6 @@ const fmt = (v: number, d = 1) => (Math.abs(v) < 5e-7 ? (0).toFixed(d) : v.toFix
 
 const rgbToCss = (c: [number, number, number]) =>
   `rgb(${c.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255)).join(' ')})`;
-
-// ---- preset buttons --------------------------------------------------------
-
-interface PresetButton {
-  el: HTMLButtonElement;
-  space: PlaneSpace;
-  axis: number;
-}
-const presetButtons: PresetButton[] = [];
-
-function buildPresets(): void {
-  gridPresetsEl.textContent = '';
-  worldPresetsEl.textContent = '';
-  presetButtons.length = 0;
-
-  // The acquisition plane is the one the last index steps through, so it is
-  // listed last and selected by default.
-  for (const axis of [0, 1, 2]) {
-    const b = document.createElement('button');
-    const others = [0, 1, 2].filter((i) => i !== axis).map((i) => GRID_AXIS_NAMES[i]);
-    b.textContent = others.join('-');
-    b.title = `Plano ${others.join('-')} de la rejilla: normal ${GRID_AXIS_NAMES[axis]}${
-      axis === 2 ? ' (plano de adquisicion)' : ''
-    }. Tecla ${GRID_AXIS_NAMES[axis]}`;
-    b.addEventListener('click', () => goToPlane('grid', axis));
-    gridPresetsEl.appendChild(b);
-    presetButtons.push({ el: b, space: 'grid', axis });
-  }
-
-  for (const axis of [2, 1, 0]) {
-    const b = document.createElement('button');
-    b.textContent = WORLD_PLANE_NAMES[axis];
-    b.title = `Tecla ${['S', 'C', 'A'][axis]}`;
-    b.addEventListener('click', () => goToPlane('world', axis));
-    worldPresetsEl.appendChild(b);
-    presetButtons.push({ el: b, space: 'world', axis });
-  }
-}
 
 // ---- overlays --------------------------------------------------------------
 
@@ -213,45 +160,14 @@ function updateOverlays(): void {
 
   updateAxisLabels();
 
-  const n = scene.n;
-  const lines = [
-    `normal   ${fmt(n[0], 3)}, ${fmt(n[1], 3)}, ${fmt(n[2], 3)}`,
-    `offset   ${fmt(scene.distance, 1)} mm`,
-  ];
-  const angles = [0, 1, 2].map((a) => scene.angleToGridAxis(a));
-  if (angles.every((a) => a !== null)) {
-    lines.push(
-      `vs ejes  ${GRID_AXIS_NAMES.map((name, i) => `${name} ${(angles[i] as number).toFixed(0)}°`).join('  ')}`,
-    );
-  }
-  planeEl.textContent = lines.join('\n');
+  // Read off the slice under the pointer, for the bar's needle and level line.
+  const val = probe ? scene.sampleWorld(probe) : null;
 
-  for (const b of presetButtons) {
-    b.el.classList.toggle(
-      'active',
-      scene.preset !== null && scene.preset.space === b.space && scene.preset.axis === b.axis,
-    );
-  }
-
-  const at = probe ?? scene.planePoint();
-  const vx = scene.voxelAt(at);
-  const val = scene.sampleWorld(at);
-  probeEl.textContent = [
-    `mundo  ${fmt(at[0])}, ${fmt(at[1])}, ${fmt(at[2])} mm (RAS)`,
-    `voxel  ${fmt(vx[0], 1)}, ${fmt(vx[1], 1)}, ${fmt(vx[2], 1)}`,
-    `valor  ${val === null ? 'fuera del volumen' : fmt(val, 2)}`,
-    probe ? '(bajo el raton)' : '(centro del plano)',
-  ].join('\n');
-
-  wlInfo.textContent =
-    `ventana ${fmt(scene.windowWidth)}   nivel ${fmt(scene.windowLevel)}`;
   // The needle only appears while actually reading a point of the slice, as in
   // the demo: parked on the plane centre it would just sit on top of a tick.
-  colorbar.setProbe(probe ? val : null);
+  colorbar.setProbe(val);
   colorbar.setLimits(scene.windowLo, scene.windowHi);
   colorbar.render();
-  slabVal.textContent = scene.slabMm > 0 ? `${fmt(scene.slabMm)} mm` : 'corte fino';
-  snapVal.textContent = scene.cartesianSnapDeg > 0 ? `${fmt(scene.cartesianSnapDeg, 1)}\u00b0` : 'sin snap';
 }
 
 function showVolumeInfo(vol: Volume): void {
@@ -263,26 +179,6 @@ function showVolumeInfo(vol: Volume): void {
     `rango     ${fmt(vol.min, 1)} .. ${fmt(vol.max, 1)}`,
     `geometria ${vol.geometrySource}`,
   ].join('\n');
-}
-
-function buildWlControls(vol: Volume): void {
-  const span = Math.max(vol.max - vol.min, 1e-3);
-  wlPresetsEl.textContent = '';
-  const all = [
-    ...(vol.looksLikeCT ? WL_PRESETS_CT : []),
-    { label: 'Auto', w: vol.hi - vol.lo, l: (vol.hi + vol.lo) / 2 },
-    { label: 'Completo', w: span, l: (vol.min + vol.max) / 2 },
-  ];
-  for (const p of all) {
-    const b = document.createElement('button');
-    b.textContent = p.label;
-    // Through the bar, so the jump slides with its easing instead of landing.
-    b.addEventListener('click', () => {
-      const w = Math.max(1e-3, p.w);
-      colorbar.animateTo(p.l - w / 2, p.l + w / 2);
-    });
-    wlPresetsEl.appendChild(b);
-  }
 }
 
 function resetCamera(): void {
@@ -307,15 +203,9 @@ async function loadBuffer(buf: ArrayBuffer, name: string): Promise<void> {
   scene.setVolume(vol);
   colorbar.setVolume(vol);
   widget.clearHover();
+  widget.reveal();
   probe = null;
 
-  const maxSlab = Math.max(10, Math.round(Math.min(...vol.dims.map((d, i) => d * vol.spacing[i])) / 2));
-  slabSlider.max = String(maxSlab);
-  slabSlider.value = '0';
-  slabModeSel.value = '0';
-  scene.slabMode = 0;
-
-  buildWlControls(vol);
   showVolumeInfo(vol);
   requestRender();
   setStatus(`${name} cargado en ${Math.round(performance.now() - t0)} ms`);
@@ -345,7 +235,6 @@ for (const s of SAMPLES) {
   o.textContent = s.label;
   sampleSel.appendChild(o);
 }
-buildPresets();
 
 sampleSel.addEventListener('change', () => {
   const s = SAMPLES.find((x) => x.file === sampleSel.value);
@@ -374,20 +263,20 @@ viewsRoot.addEventListener('drop', (e) => {
   if (f) void guarded(async () => loadBuffer(await f.arrayBuffer(), f.name));
 });
 
-btnResetCamera.addEventListener('click', resetCamera);
-
-snapSlider.addEventListener('input', () => {
-  scene.cartesianSnapDeg = Number(snapSlider.value);
-  requestRender();
-});
-
-slabSlider.addEventListener('input', () => {
-  scene.slabMm = Number(slabSlider.value);
-  requestRender();
-});
-slabModeSel.addEventListener('change', () => {
-  scene.slabMode = Number(slabModeSel.value) as SlabMode;
-  requestRender();
+// The corner axis marker is a control: clicking an axis swings the camera
+// round to look along it, that axis towards the viewer, and clicking it again
+// goes round to the other side. The labels sit inside the pane, so their
+// presses are kept from reaching the pane's own orbit and double click.
+axisEls.forEach((el, i) => {
+  el.title = `Mirar desde ${['R', 'A', 'S'][i]}; otra vez, desde ${['L', 'P', 'I'][i]}`;
+  el.addEventListener('pointerdown', (e) => e.stopPropagation());
+  el.addEventListener('dblclick', (e) => e.stopPropagation());
+  el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!scene.vol) return;
+    scene.viewAlongAxis(i);
+    requestRender();
+  });
 });
 
 attachInteraction(pane, scene, widget, {
@@ -405,11 +294,21 @@ attachInteraction(pane, scene, widget, {
   onPinLevel: () => {
     if (probe) colorbar.pinLevel(scene.sampleWorld(probe));
   },
+  onFacePlane: () => {
+    scene.facePlane();
+    requestRender();
+  },
+  // The bar keeps its scale still while the window is dragged from the view,
+  // and eases it to the new limits once the drag is over.
+  onWindowGesture: (active) => {
+    if (active) colorbar.holdScale();
+    else colorbar.releaseScale();
+  },
 });
 
 new ResizeObserver(() => requestRender()).observe(viewsRoot);
 new ResizeObserver(() => colorbar.render()).observe($<HTMLElement>('#colorbar'));
 window.addEventListener('resize', requestRender);
 
-sampleSel.value = SAMPLES[0].file;
-void guarded(() => loadUrl(`data/${SAMPLES[0].file}`, SAMPLES[0].file));
+sampleSel.value = DEFAULT_SAMPLE;
+void guarded(() => loadUrl(`data/${DEFAULT_SAMPLE}`, DEFAULT_SAMPLE));

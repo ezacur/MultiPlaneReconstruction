@@ -45,10 +45,14 @@ button.active { border-color: var(--accent); color: #fff; background: #2c3a5c; }
 .pane .lbl { position: absolute; pointer-events: none; font-size: 12px; color: #cfd3dc; text-shadow: 0 0 3px #000, 0 0 3px #000; }
 .pane .title { top: 8px; left: 10px; font-weight: 600; color: var(--c); font-size: 13px; }
 .pane .slice { top: 26px; left: 10px; font-variant-numeric: tabular-nums; }
-.pane .hint { bottom: 10px; right: 12px; color: var(--muted); }
-.pane .axis { position: absolute; pointer-events: none; font-weight: 700;
+/* Top right: the bottom right corner belongs to the colour bar. */
+.pane .hint { top: 8px; right: 12px; color: var(--muted); }
+/* The axis letters are the corner marker's buttons: a click looks along that
+   axis. The padding gives a finger-sized target around a one-letter label. */
+.pane .axis { position: absolute; pointer-events: auto; cursor: pointer; font-weight: 700;
   transform: translate(-50%, -50%); text-shadow: 0 0 3px #000, 0 0 3px #000;
-  white-space: nowrap; }
+  white-space: nowrap; padding: 3px 6px; border-radius: 3px; line-height: 1; }
+.pane .axis:hover { background: rgba(255,255,255,.12); }
 .pane .axis b { font-size: 12px; }
 .pane .axis i { font-style: normal; font-size: 9px; font-weight: 600; opacity: .7; margin-left: 1px; }
 
@@ -67,143 +71,139 @@ button.active { border-color: var(--accent); color: #fff; background: #2c3a5c; }
 
 /* The demo's own dark palette, kept local to the bar so it reads as the same
    instrument rather than as a panel widget. */
-.cb { --cb-surface: #131A1E; --cb-line: #25313A; --cb-line-strong: #3A4A55;
+.cb { --cb-line: #25313A; --cb-line-strong: #3A4A55;
   --cb-ink: #E4ECF0; --cb-ink-2: #A3B1BA; --cb-ink-3: #84949C;
   --cb-live: #E5A65A; --cb-hl: #F2F6F8;
-  --cb-hist: 46px; --cb-bar: 18px; --cb-ticks: 62px; }
+  --cb-hist: 46px; --cb-bar: 16px; --cb-ticks: 32px;
+  --cb-len: clamp(240px, 30vw, 440px);
+  /* No panel behind the bar: its text keeps a dark halo instead, so it reads
+     over whatever the 3D view has behind it. */
+  --cb-halo: 0 0 2px #000, 0 0 3px #000, 0 0 5px rgba(0,0,0,.8); }
 
-/* Floats over the render pane, bottom right. It is a sibling of the pane, not
-   a child, so its pointer events never bubble into the 3D handlers. */
-#colorbar { position: absolute; right: 14px; bottom: 14px; z-index: 10;
-  background: #131A1E; border: 1px solid #25313A; border-radius: 3px;
-  padding: 10px 10px 10px 8px;
-  box-shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7); }
+/* Floats over the render pane, bottom right, with nothing behind it: no panel,
+   no border. It is a sibling of the pane, not a child, so its pointer events
+   never bubble into the 3D handlers. The right margin leaves room for the fold
+   button and for the high limit's box, which is centred on its end. */
+#colorbar { position: absolute; right: 46px; bottom: 10px; z-index: 10; }
 
-/* The track is exactly as wide as its three columns, so the saturation labels
-   can be anchored by their right edge against the bar. */
-.cb-track { position: relative; height: 260px; touch-action: none; cursor: crosshair;
-  width: calc(var(--cb-hist) + var(--cb-bar) + var(--cb-ticks)); }
+/* Three rows, top to bottom: the histogram, the bar, the ticks. Values run
+   left to right along all three. */
+.cb-track { position: relative; width: var(--cb-len); touch-action: none; cursor: crosshair;
+  height: calc(var(--cb-hist) + var(--cb-bar) + var(--cb-ticks)); }
 
-/* A canvas is a replaced element: without an explicit pixel height it falls
-   back to its intrinsic size and the bar collapses. The JS stamps width and
-   height in device pixels; these rules fix the CSS box. */
-.cb-hist { position: absolute; left: 0; top: 0; height: 100%; width: var(--cb-hist);
+/* A canvas is a replaced element: without an explicit size it falls back to
+   its intrinsic one. The JS stamps the buffer in device pixels; these rules fix
+   the CSS box. */
+.cb-hist { position: absolute; left: 0; top: 0; width: 100%; height: var(--cb-hist);
   display: block; pointer-events: none; }
-/* The frame goes in box-shadow, not border: with border-box a border eats 2 px
-   of height and shifts the ramp by one, and then the histogram, the handles and
-   the marks stop lining up with it. */
-.cb-bar { position: absolute; left: var(--cb-hist); top: 0; height: 100%; width: var(--cb-bar);
-  display: block; cursor: crosshair; box-shadow: 0 0 0 1px var(--cb-line-strong); }
+.cb-bar { position: absolute; left: 0; top: var(--cb-hist); width: 100%; height: var(--cb-bar);
+  display: block; cursor: crosshair; }
 .cb-track.panning, .cb-track.panning * { cursor: grabbing !important; }
-.cb-track.dragging, .cb-track.dragging * { cursor: ns-resize !important; }
+.cb-track.dragging, .cb-track.dragging * { cursor: ew-resize !important; }
 
-.cb-histbtn { position: absolute; left: calc(var(--cb-hist) - 11px); top: 0; width: 11px;
-  height: 11px; z-index: 9; display: flex; align-items: center; justify-content: center;
-  padding: 0; flex: none; font-family: ui-monospace, Consolas, monospace; font-size: 8px;
-  line-height: 1; color: var(--cb-ink-2); background: var(--cb-surface);
-  border: 1px solid var(--cb-line-strong); border-radius: 0 0 0 2px; cursor: pointer; }
-.cb-histbtn:hover { color: var(--cb-live); border-color: var(--cb-live);
-  background: var(--cb-surface); }
+/* Folds the histogram down onto the bar and back: beside the bar's right end,
+   bare, with no box. */
+.cb-histbtn { position: absolute; left: calc(100% + 6px);
+  top: calc(var(--cb-hist) + var(--cb-bar) / 2); transform: translateY(-50%);
+  width: 16px; height: 16px; padding: 0; display: flex; align-items: center;
+  justify-content: center; font: 700 14px/1 ui-monospace, Consolas, monospace;
+  color: var(--cb-ink-2); background: none; border: 0; cursor: pointer;
+  text-shadow: var(--cb-halo); }
+.cb-histbtn:hover { color: var(--cb-live); background: none; }
 
 /* The axis lives INSIDE the window: past the limits there are no ticks, and the
    first and last of the scale are the limit boxes themselves. */
-.cb-ticks { position: absolute; left: calc(var(--cb-hist) + var(--cb-bar) + 4px); top: 0;
-  bottom: 0; right: 0; pointer-events: none; }
-.cb-tick { position: absolute; left: 0; transform: translateY(-50%); display: flex;
-  align-items: center; gap: 4px; font-family: ui-monospace, Consolas, monospace;
-  font-size: 10.5px; color: var(--cb-ink-3); white-space: nowrap; }
-.cb-tick i { display: block; width: 5px; height: 1px; background: var(--cb-line-strong); }
+.cb-ticks { position: absolute; left: 0; right: 0; top: calc(var(--cb-hist) + var(--cb-bar) + 1px);
+  bottom: 0; pointer-events: none; }
+.cb-tick { position: absolute; top: 0; transform: translateX(-50%); display: flex;
+  flex-direction: column; align-items: center; gap: 2px;
+  font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; color: var(--cb-ink-3);
+  white-space: nowrap; text-shadow: var(--cb-halo); }
+.cb-tick i { display: block; width: 1px; height: 5px; background: var(--cb-line-strong); }
 
 /* A limit's tick outweighs the axis ones: thicker mark, bigger figure, bold and
-   in the strong ink, against the 10.5 px in --cb-ink-3 of the others. */
-.cb-lim { position: absolute; left: calc(var(--cb-hist) + var(--cb-bar) + 4px);
-  transform: translateY(-50%); display: flex; align-items: center; gap: 4px;
-  z-index: 8; }
-.cb-lim i { display: block; width: 6px; height: 2px; background: var(--cb-ink-2); flex: none; }
-.cb-lim-in { width: 54px; font-family: ui-monospace, Consolas, monospace; font-size: 12px;
-  font-weight: 600; text-align: left; color: var(--cb-ink); background: transparent;
-  border: 1px solid transparent; border-radius: 2px; padding: 1px 3px;
-  font-variant-numeric: tabular-nums; }
-.cb-lim-in:hover { background: #182126; border-color: var(--cb-line); }
-.cb-lim-in:focus { background: var(--cb-surface); border-color: #7EB6E6; outline: none; }
+   in the strong ink. The box is centred on its limit like any tick. */
+.cb-lim { position: absolute; top: calc(var(--cb-hist) + var(--cb-bar) + 1px);
+  transform: translateX(-50%); display: flex; flex-direction: column; align-items: center;
+  gap: 1px; z-index: 8; }
+.cb-lim i { display: block; width: 2px; height: 6px; background: var(--cb-ink-2); flex: none; }
+.cb-lim-in { width: 50px; font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+  font-weight: 600; text-align: center; color: var(--cb-ink); background: transparent;
+  border: 1px solid transparent; border-radius: 2px; padding: 0 2px;
+  font-variant-numeric: tabular-nums; text-shadow: var(--cb-halo); }
+.cb-lim-in:hover { border-color: var(--cb-line-strong); }
+.cb-lim-in:focus { background: rgba(10,14,17,.85); border-color: #7EB6E6; outline: none;
+  text-shadow: none; }
 
-/* Saturation on each side, anchored by its right edge against the bar and of
-   automatic width: a long label overflows left over the histogram instead of
-   onto the ramp. */
-.cb-pct { position: absolute; right: calc(var(--cb-bar) + var(--cb-ticks));
-  padding: 0 9px 0 4px; text-align: right; transform: translateY(-50%);
+/* The percentile each limit leaves below it, over the histogram at the limit's
+   place, standing on the bar. */
+.cb-pct { position: absolute; top: calc(var(--cb-hist) - 15px); transform: translateX(-50%);
   font-family: ui-monospace, Consolas, monospace; font-size: 10px; color: var(--cb-live);
   letter-spacing: .02em; white-space: nowrap; font-variant-numeric: tabular-nums;
-  background: var(--cb-surface); border-radius: 2px; pointer-events: none; z-index: 6; }
-.cb-pct::after { content: ""; position: absolute; right: 1px; top: calc(50% - 1px);
-  width: 7px; height: 2px; background: var(--cb-live); }
+  pointer-events: none; z-index: 6; text-shadow: var(--cb-halo); }
 .cb.nopct .cb-pct { display: none; }
 
-/* Range of the data: two fixed marks on the left edge of the bar. The stretch
-   between them is where there is data; the rest is domain margin or a limit
-   pulled out. In ink, not orange: they belong to the data, not to the limits. */
-.cb-dmark { position: absolute; left: calc(var(--cb-hist) - 6px); width: 6px; height: 1px;
-  background: var(--cb-ink-2); transform: translateY(-50%); pointer-events: none; z-index: 5; }
+/* Range of the data: two marks on the top edge of the bar. The stretch between
+   them is where there is data; the rest is domain margin or a limit pulled out.
+   In ink, not orange: they belong to the data, not to the limits. */
+.cb-dmark { position: absolute; top: calc(var(--cb-hist) - 6px); width: 1px; height: 6px;
+  background: var(--cb-ink-2); transform: translateX(-50%); pointer-events: none; z-index: 5; }
 
 /* The handle is only the line: no little square covering the ramp. The feedback
    is the line itself, which thickens and turns orange. The grab area stays
-   16 px tall. */
-.cb-hnd { position: absolute; left: var(--cb-hist); width: var(--cb-bar); height: 16px;
-  transform: translateY(-50%); cursor: ns-resize; z-index: 5; }
-.cb-hnd::before { content: ""; position: absolute; left: -4px; right: -4px; top: 7px;
-  height: 2px; background: var(--cb-hl); box-shadow: 0 0 0 1px rgba(0,0,0,.75); }
-.cb-hnd:hover::before, .cb-hnd.act::before { height: 4px; top: 6px; background: var(--cb-live);
+   16 px wide. */
+.cb-hnd { position: absolute; top: var(--cb-hist); height: var(--cb-bar); width: 16px;
+  transform: translateX(-50%); cursor: ew-resize; z-index: 5; }
+.cb-hnd::before { content: ""; position: absolute; top: -4px; bottom: -4px; left: 7px;
+  width: 2px; background: var(--cb-hl); box-shadow: 0 0 0 1px rgba(0,0,0,.75); }
+.cb-hnd:hover::before, .cb-hnd.act::before { width: 4px; left: 6px; background: var(--cb-live);
   box-shadow: 0 0 0 1px var(--cb-hl); }
 
-/* Percentile guides while Ctrl is held: a tick per magnet stop in the band to
-   the left of the bar, with its figure. Background only behind the figure; over
-   the bare histogram it would be unreadable. */
-.cb-gtick { position: absolute; left: 0; width: var(--cb-hist); padding: 0 9px 0 2px;
-  text-align: right; transform: translateY(-50%); font-family: ui-monospace, Consolas, monospace;
-  font-size: 9.5px; color: var(--cb-live); white-space: nowrap;
-  font-variant-numeric: tabular-nums; pointer-events: none; z-index: 5; }
-.cb-gtick:not(:empty) { background: linear-gradient(to right, transparent 0,
-  var(--cb-surface) 6px, var(--cb-surface) calc(100% - 9px), transparent 100%); }
-.cb-gtick::after { content: ""; position: absolute; right: 1px; top: calc(50% - 0.5px);
-  width: 7px; height: 1px; background: var(--cb-live); }
+/* Percentile guides while Ctrl is held: a tick per magnet stop just above the
+   bar, with its figure over the histogram. */
+.cb-gtick { position: absolute; top: 0; height: var(--cb-hist); transform: translateX(-50%);
+  display: flex; align-items: flex-end; padding-bottom: 9px; box-sizing: border-box;
+  font-family: ui-monospace, Consolas, monospace; font-size: 9.5px; color: var(--cb-live);
+  white-space: nowrap; font-variant-numeric: tabular-nums; pointer-events: none; z-index: 5;
+  text-shadow: var(--cb-halo); }
+.cb-gtick::after { content: ""; position: absolute; left: 50%; bottom: 1px; width: 1px;
+  height: 7px; background: var(--cb-live); }
 .cb.nopct .cb-gtick { display: none; }
 
-.cb-needle { position: absolute; left: calc(var(--cb-hist) - 6px);
-  width: calc(var(--cb-bar) + 12px); height: 0; border-top: 1px solid var(--cb-hl);
+/* The level being pointed at: a line across the bar, its value above it. */
+.cb-needle { position: absolute; top: calc(var(--cb-hist) - 6px); width: 0;
+  height: calc(var(--cb-bar) + 12px); border-left: 1px solid var(--cb-hl);
   filter: drop-shadow(0 0 1.2px rgba(0,0,0,.9)); pointer-events: none; z-index: 7;
   display: none; }
-.cb-needle span { position: absolute; left: calc(100% + 5px); top: -9px;
-  font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; color: var(--cb-ink);
-  background: var(--cb-surface); border: 1px solid var(--cb-line-strong); border-radius: 2px;
-  padding: 0 4px; white-space: nowrap; filter: none; }
+.cb-needle span { position: absolute; bottom: calc(100% + 2px); left: 0;
+  transform: translateX(-50%); font-family: ui-monospace, Consolas, monospace;
+  font-size: 10.5px; color: var(--cb-ink); white-space: nowrap; text-shadow: var(--cb-halo); }
 
-/* A warp knot. Its horizontal place is the grey it carries, its vertical place
-   the value it paints; the line joining them, drawn on the bar, is the transfer
+/* A warp knot. Its place along the bar is the value it paints, its height the
+   grey it carries; the line joining them, drawn on the bar, is the transfer
    function. The grab area follows the circle so it leaves the rest of the bar
-   width free for the handle. */
-.cb-knot { position: absolute;
-  left: calc(var(--cb-hist) + var(--cb-ky) * var(--cb-bar) - 6px);
-  width: 12px; height: 14px; transform: translateY(-50%); cursor: ns-resize; z-index: 4; }
-.cb-knot::after { content: ""; position: absolute; left: 50%; top: 4px; width: 7px; height: 7px;
-  margin-left: -3.5px; background: var(--cb-hl); border: 1px solid rgba(0,0,0,.75);
-  border-radius: 50%; box-shadow: 0 1px 2px rgba(0,0,0,.4); }
+   free for the handle. */
+.cb-knot { position: absolute; transform: translate(-50%, -50%);
+  top: calc(var(--cb-hist) + (1 - var(--cb-ky)) * var(--cb-bar));
+  width: 14px; height: 12px; cursor: ew-resize; z-index: 4; }
+.cb-knot::after { content: ""; position: absolute; left: 50%; top: 50%; width: 7px; height: 7px;
+  margin: -3.5px 0 0 -3.5px; background: var(--cb-hl); border: 1px solid rgba(0,0,0,.75);
+  border-radius: 50%; box-shadow: 0 1px 2px rgba(0,0,0,.4); box-sizing: border-box; }
 .cb-knot:hover::after, .cb-knot.act::after { background: #A6CDEE; border-color: var(--cb-hl); }
 
-/* A pinned level line: a tick across the RIGHT HALF of the bar, like a value
-   mark but stronger, with its figure beside it. Highlighted, in orange, it is
+/* A pinned level line: a tick across the TOP HALF of the bar, like a value
+   mark but stronger, with its figure above it. Highlighted, in orange, it is
    the same line drawn orange over the slice. */
-.cb-pin { position: absolute; left: calc(var(--cb-hist) + var(--cb-bar) / 2);
-  width: calc(var(--cb-bar) / 2); height: 11px; transform: translateY(-50%); z-index: 3;
-  cursor: pointer; }
-.cb-pin::before { content: ""; position: absolute; left: 0; right: 0; top: 5px; height: 2px;
+.cb-pin { position: absolute; top: var(--cb-hist); height: calc(var(--cb-bar) / 2); width: 11px;
+  transform: translateX(-50%); z-index: 3; cursor: pointer; }
+.cb-pin::before { content: ""; position: absolute; top: 0; bottom: 0; left: 4.5px; width: 2px;
   background: var(--cb-hl); box-shadow: 0 0 0 1px rgba(0,0,0,.75); }
-.cb-pin span { position: absolute; left: calc(100% + 11px); top: -4px;
+.cb-pin span { position: absolute; bottom: calc(100% + 2px); left: 50%; transform: translateX(-50%);
   font-family: ui-monospace, Consolas, monospace; font-size: 10px; color: var(--cb-ink-2);
-  background: var(--cb-surface); border: 1px solid var(--cb-line); border-radius: 2px;
-  padding: 0 3px; white-space: nowrap; pointer-events: none; }
-.cb-pin.hot::before { background: var(--cb-live); height: 4px; top: 3px;
+  white-space: nowrap; pointer-events: none; text-shadow: var(--cb-halo); }
+.cb-pin.hot::before { background: var(--cb-live); width: 4px; left: 3.5px;
   box-shadow: 0 0 0 1px var(--cb-hl); }
-.cb-pin.hot span { color: var(--cb-live); border-color: var(--cb-live); font-weight: 600; }
+.cb-pin.hot span { color: var(--cb-live); font-weight: 600; }
 
 /* Saturation colour dialog, anchored to the pointer. */
 .cb-pick { position: fixed; z-index: 50; background: #131A1E; border: 1px solid #3A4A55;

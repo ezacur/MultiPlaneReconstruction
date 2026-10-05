@@ -1,6 +1,6 @@
 import type { vec3 } from 'gl-matrix';
 import { contentBox } from './layout';
-import type { BoxFace, PlaneSpace, Ray, Scene } from './scene';
+import { ELEVATION_LIMIT, type BoxFace, type PlaneSpace, type Ray, type Scene } from './scene';
 import type { PlaneWidget } from './widget';
 
 type Mode = 'widget' | 'orbit' | 'wl';
@@ -24,17 +24,15 @@ export interface InteractionHooks {
   onPlane(space: PlaneSpace, axis: number): void;
   /** Pin the level under the pointer as a level line. */
   onPinLevel(): void;
+  /** Turn the camera to face the slice square on. */
+  onFacePlane(): void;
+  /** A window / level drag starts (true) or ends (false). */
+  onWindowGesture(active: boolean): void;
 }
 
-/** The plane keys animate across rather than snapping. */
-const PLANE_KEYS: Record<string, [PlaneSpace, number]> = {
-  i: ['grid', 0],
-  j: ['grid', 1],
-  k: ['grid', 2],
-  a: ['world', 2],
-  c: ['world', 1],
-  s: ['world', 0],
-};
+/** Two right presses this close in time and space make a right double click. */
+const RIGHT_DOUBLE_MS = 400;
+const RIGHT_DOUBLE_PX = 6;
 
 export function attachInteraction(
   pane: HTMLElement,
@@ -43,6 +41,8 @@ export function attachInteraction(
   hooks: InteractionHooks,
 ): void {
   let drag: Drag | null = null;
+  // The browser has no double click for the right button, so it is timed here.
+  let lastRight = { t: -Infinity, x: 0, y: 0 };
 
   const rayAt = (e: MouseEvent): Ray | null => {
     const r = contentBox(pane);
@@ -92,6 +92,20 @@ export function attachInteraction(
     const onPlane = ray !== null && widget.overPlane(ray) !== null;
     const slideButton = e.button === 0 || e.button === 1 || e.button === 2;
 
+    // A right double click on the image turns the camera to face it. The
+    // second press is taken by it, rather than starting another slide.
+    if (e.button === 2 && onPlane && !onRing) {
+      const now = performance.now();
+      const near =
+        Math.hypot(e.clientX - lastRight.x, e.clientY - lastRight.y) <= RIGHT_DOUBLE_PX;
+      if (now - lastRight.t <= RIGHT_DOUBLE_MS && near) {
+        lastRight = { t: -Infinity, x: 0, y: 0 };
+        hooks.onFacePlane();
+        return;
+      }
+      lastRight = { t: now, x: e.clientX, y: e.clientY };
+    }
+
     // Shift+click on the image pins the level under the pointer, as on the
     // bar. It is a click, not the start of a drag.
     if (e.shiftKey && e.button === 0 && onPlane && !onRing) {
@@ -116,6 +130,7 @@ export function attachInteraction(
     }
 
     drag = { pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY, mode };
+    if (mode === 'wl') hooks.onWindowGesture(true);
     pane.style.cursor = cursorFor();
     hooks.onChange();
   });
@@ -151,8 +166,12 @@ export function attachInteraction(
         break;
       }
       case 'orbit':
+        scene.stopCameraMove();
         scene.camera.azimuth -= dx * 0.008;
-        scene.camera.elevation = Math.max(-1.5, Math.min(1.5, scene.camera.elevation + dy * 0.008));
+        scene.camera.elevation = Math.max(
+          -ELEVATION_LIMIT,
+          Math.min(ELEVATION_LIMIT, scene.camera.elevation + dy * 0.008),
+        );
         break;
     }
     hooks.onChange();
@@ -199,6 +218,7 @@ export function attachInteraction(
   const endDrag = (e: PointerEvent) => {
     if (!drag || drag.pointerId !== e.pointerId) return;
     if (drag.mode === 'widget') widget.end();
+    if (drag.mode === 'wl') hooks.onWindowGesture(false);
     drag = null;
     try {
       if (pane.hasPointerCapture(e.pointerId)) pane.releasePointerCapture(e.pointerId);
@@ -212,30 +232,12 @@ export function attachInteraction(
   pane.addEventListener('pointerup', endDrag);
   pane.addEventListener('pointercancel', endDrag);
 
+  // The only key of the view: Escape puts back what the drag in progress
+  // changed. Everything else is done with the mouse.
   window.addEventListener('keydown', (e) => {
-    if (!scene.vol) return;
-    const t = e.target as HTMLElement | null;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
-
-    if (e.key === 'Escape') {
-      if (widget.active) {
-        widget.cancel();
-        drag = null;
-        hooks.onChange();
-      }
-      return;
-    }
-
-    // Leave Ctrl+C, Ctrl+F and the like to the browser.
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
-
-    const key = e.key.toLowerCase();
-    const plane = PLANE_KEYS[key];
-    if (plane) {
-      hooks.onPlane(plane[0], plane[1]);
-      return;
-    }
-
-    if (key === 'f') hooks.onResetCamera();
+    if (e.key !== 'Escape' || !scene.vol || !widget.active) return;
+    widget.cancel();
+    drag = null;
+    hooks.onChange();
   });
 }
