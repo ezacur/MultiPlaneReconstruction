@@ -46,13 +46,16 @@ WebGL2 y la app muestra un aviso en lugar de la imagen.
 
 ### Pasos
 
-1. Consigue una copia del proyecto, clonando el repositorio o descomprimiendo
-   el archivo que te hayan pasado:
+1. Clona el repositorio. Es privado: necesitas que su propietario te invite
+   como colaborador en GitHub.
 
    ```
-   git clone <url-del-repositorio> MultiPlaneReconstruction
+   git clone https://github.com/ezacur/MultiPlaneReconstruction.git
    cd MultiPlaneReconstruction
    ```
+
+   Tambien sirve una copia descomprimida del proyecto, si te la han pasado
+   asi.
 
 2. Instala las dependencias (solo la primera vez, o cuando cambie
    `package.json`):
