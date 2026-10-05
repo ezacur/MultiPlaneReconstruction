@@ -8,7 +8,6 @@ import {
   directionLabel,
   GRID_AXIS_NAMES,
   Scene,
-  type BoxFace,
   type PlaneSpace,
 } from './scene';
 import { PlaneWidget } from './widget';
@@ -77,7 +76,6 @@ try {
 }
 
 let probe: vec3 | null = null;
-let faceHover: BoxFace | null = null;
 let pending = false;
 
 function setStatus(text: string, isError = false): void {
@@ -103,7 +101,7 @@ function requestRender(): void {
     const camera = scene.tickCamera(now);
     const ring = widget.tick(now);
     const animating = plane || camera || ring;
-    renderer.render(scene, widget, paneRect(), faceHover);
+    renderer.render(scene, widget, paneRect());
     updateOverlays();
     if (animating) requestRender();
   });
@@ -143,8 +141,8 @@ function updateOverlays(): void {
 
   const st = widget.state;
   hintEl.textContent =
-    st === null && faceHover
-      ? `doble clic para el plano ${GRID_AXIS_NAMES[faceHover.axis]}`
+    widget.hoveredMark !== null
+      ? `doble clic: plano de normal ${GRID_AXIS_NAMES[widget.hoveredMark]}`
       : st === 'translate'
       ? 'deslizando por la normal'
       : st === 'rotate'
@@ -281,10 +279,6 @@ axisEls.forEach((el, i) => {
 
 attachInteraction(pane, scene, widget, {
   onChange: requestRender,
-  onFaceHover: (face) => {
-    faceHover = face;
-    requestRender();
-  },
   onProbe: (w) => {
     probe = w;
     requestRender();

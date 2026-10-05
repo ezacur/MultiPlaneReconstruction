@@ -42,17 +42,6 @@ export interface TriadAxis {
   color: [number, number, number];
 }
 
-/** A face of the volume box, named by the voxel axis normal to it. */
-export interface BoxFace {
-  /** Voxel axis index: 0 = I, 1 = J, 2 = K. */
-  axis: number;
-  /** +1 for the far face along that axis, -1 for the near one. */
-  sign: number;
-  /** The four corners, in world mm. */
-  corners: vec3[];
-  color: [number, number, number];
-}
-
 /** Size of the corner axis marker, as a fraction of the pane's half-height. */
 const TRIAD_RADIUS = 0.13;
 
@@ -772,68 +761,6 @@ export class Scene {
         depth: vec3.dot(d, forward),
         color: directionColor(d),
       })),
-    };
-  }
-
-  /**
-   * The face of the volume box a ray enters through. Its normal is a voxel
-   * axis, so clicking a face is a way of asking for that cartesian plane.
-   */
-  pickBoxFace(ray: Ray): BoxFace | null {
-    const vol = this.vol;
-    if (!vol) return null;
-    // Work in voxel space, where the box is axis aligned.
-    const o = vec3.transformMat4(vec3.create(), ray.origin, vol.worldToVoxel);
-    const ahead = vec3.add(vec3.create(), ray.origin, ray.dir);
-    const d = vec3.sub(
-      vec3.create(),
-      vec3.transformMat4(vec3.create(), ahead, vol.worldToVoxel),
-      o,
-    );
-    const lo = [-0.5, -0.5, -0.5];
-    const hi = [vol.dims[0] - 0.5, vol.dims[1] - 0.5, vol.dims[2] - 0.5];
-
-    let tMin = -Infinity;
-    let tMax = Infinity;
-    let axis = -1;
-    let sign = -1;
-    for (let i = 0; i < 3; i++) {
-      if (Math.abs(d[i]) < 1e-9) {
-        if (o[i] < lo[i] || o[i] > hi[i]) return null;
-        continue;
-      }
-      let t1 = (lo[i] - o[i]) / d[i];
-      let t2 = (hi[i] - o[i]) / d[i];
-      let s = -1;
-      if (t1 > t2) {
-        [t1, t2] = [t2, t1];
-        s = 1;
-      }
-      if (t1 > tMin) {
-        tMin = t1;
-        axis = i;
-        sign = s;
-      }
-      if (t2 < tMax) tMax = t2;
-      if (tMin > tMax) return null;
-    }
-    if (axis < 0 || tMin < 0) return null;
-
-    const j = (axis + 1) % 3;
-    const k = (axis + 2) % 3;
-    const corner = (a: boolean, b: boolean): vec3 => {
-      const p = vec3.create();
-      p[axis] = sign > 0 ? hi[axis] : lo[axis];
-      p[j] = a ? hi[j] : lo[j];
-      p[k] = b ? hi[k] : lo[k];
-      return vec3.transformMat4(p, p, vol.voxelToWorld);
-    };
-    const axes = this.gridAxes();
-    return {
-      axis,
-      sign,
-      corners: [corner(false, false), corner(true, false), corner(true, true), corner(false, true)],
-      color: axes ? directionColor(axes[axis]) : [1, 1, 1],
     };
   }
 

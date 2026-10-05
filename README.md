@@ -90,13 +90,16 @@ voxeles ni con los ejes del paciente.
 Si el array es de I x J x K, el plano de adquisicion es `I-J`: el que recorre el
 indice K. Es el que sale por defecto.
 
-Todo se hace con el raton; no hay atajos de teclado. **Un doble clic sobre una
-cara de la caja del volumen** lleva el
-plano a la cartesiana paralela a esa cara. Las caras de la caja son justamente
-los planos de la rejilla, asi que la cara que se ve de frente es la que se pide.
-Al pasar el raton por encima se dibuja el contorno de la cara que se elegiria,
-con el color que tomara el plano. Un doble clic fuera de la caja reencuadra la
-camara.
+Hay dos formas directas de llevar el plano a una cartesiana de la rejilla:
+
+- las teclas **I**, **J** y **K**, que lo llevan al plano de normal I, J o K;
+- un **doble clic sobre una marca de color del anillo**: la roja lleva al plano
+  de normal I, la verde al de J y la azul al de K. Al pasar el raton por encima
+  de una marca, esta se resalta mostrando su borde, y la pista de la vista dice
+  a que plano lleva. La zona que responde ocupa todo el ancho del anillo, no solo
+  la franja fina de color, para que sea facil acertar.
+
+Un doble clic en el vacio, fuera del plano, reencuadra la camara.
 
 Cambiar de plano no salta: la orientacion se interpola como un slerp de
 cuaterniones, asi que el plano gira visiblemente hasta su destino en unos 420
@@ -401,9 +404,9 @@ que en el demo.
 | Cambiar de corte | Rueda sobre el plano (Shift avanza de 5 en 5) |
 | Fijar la linea de nivel del valor bajo el cursor | Shift + clic sobre la imagen |
 | Acercar la camara | Rueda fuera del plano |
-| Ir a un plano cartesiano | Doble clic en una cara de la caja del volumen |
+| Ir a un plano cartesiano | Doble clic en una marca de color del anillo, o las teclas I, J y K |
 | Ventana / nivel | Ctrl + arrastrar, o boton central fuera del plano |
-| Reencuadrar la camara | Doble clic fuera de la caja |
+| Reencuadrar la camara | Doble clic en el vacio |
 | Mirar a lo largo de un eje | Clic en la letra R, A o S del marcador de ejes |
 | Mirar el corte de frente | Doble clic derecho sobre la imagen |
 | Cancelar el arrastre | Esc |
@@ -411,10 +414,11 @@ que en el demo.
 El reparto es espacial: sobre lo que el plano dibuja el raton manda sobre el
 plano, y sobre el vacio manda sobre la camara.
 
-No hay atajos de teclado. Las teclas que quedan son modificadores de gestos de
-raton: Shift para las lineas de nivel, Ctrl para ventana / nivel y para el iman
-de percentiles, Alt para el ajuste fino de la barra, y Esc para deshacer el
-arrastre en curso.
+Del teclado solo quedan **I**, **J** y **K**, que llevan el plano a las
+cartesianas de la rejilla, y Esc para deshacer el arrastre en curso. Las demas
+teclas son modificadores de gestos de raton: Shift para las lineas de nivel,
+Ctrl para ventana / nivel y para el iman de percentiles, y Alt para el ajuste
+fino de la barra.
 
 En la esquina inferior izquierda hay un marcador de ejes R/A/S que sigue a la
 camara y dice hacia donde mira el paciente. Es tambien un control: un clic en
@@ -455,7 +459,7 @@ En `public/data`, descargados de
 | `src/scene.ts` | El plano, el pivote, los planos cartesianos, las transiciones animadas del plano y de la camara, el color direccional, el recorte del plano contra el volumen, la camara 3D, el marcador de ejes y el lanzado de rayos. |
 | `src/widget.ts` | El manipulador: el anillo, el ciclo del arrastre y la geometria de las guias. |
 | `src/renderer.ts` | WebGL2: textura 3D, shader de reslice, la vista y el dibujo de lineas. |
-| `src/interact.ts` | Raton, rueda y la tecla Esc. |
+| `src/interact.ts` | Raton, rueda y las teclas I, J, K y Esc. |
 | `src/quantise.ts` | El snap de la normal a los ejes cartesianos de la rejilla. |
 | `src/colorbar.ts` | La barra de grises: histograma, limites arrastrables, ticks y aguja. |
 | `src/main.ts` | Panel, carga de ficheros y bucle de dibujo. |

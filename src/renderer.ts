@@ -1,6 +1,6 @@
 import { mat4, vec3 } from 'gl-matrix';
 import type { Volume } from './nifti';
-import type { BoxFace, Scene } from './scene';
+import type { Scene } from './scene';
 import type { DepthMode, LineBatch, PlaneWidget } from './widget';
 
 export interface Rect {
@@ -267,8 +267,6 @@ const FOG_RGB: [number, number, number] = [0.06, 0.06, 0.07];
 
 const BOX_RGB: [number, number, number] = [0.5, 0.54, 0.63];
 const BOX_ALPHA = 0.07;
-/** The hovered face outline, faint enough to read as a hint. */
-const FACE_ALPHA = 0.2;
 
 export class Renderer {
   readonly gl: WebGL2RenderingContext;
@@ -546,7 +544,7 @@ export class Renderer {
     gl.disable(gl.BLEND);
   }
 
-  render(scene: Scene, widget: PlaneWidget, rect: Rect, face: BoxFace | null = null): void {
+  render(scene: Scene, widget: PlaneWidget, rect: Rect): void {
     const gl = this.gl;
     const [cssH, dpr] = this.syncSize();
 
@@ -562,7 +560,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_3D, this.tex);
 
-    this.draw3D(scene, widget, rect, cssH, dpr, this.slabSteps(scene), face);
+    this.draw3D(scene, widget, rect, cssH, dpr, this.slabSteps(scene));
 
     gl.disable(gl.SCISSOR_TEST);
     gl.bindVertexArray(null);
@@ -630,7 +628,6 @@ export class Renderer {
     cssH: number,
     dpr: number,
     slabSteps: number,
-    face: BoxFace | null,
   ): void {
     const gl = this.gl;
     this.setViewport(r, cssH, dpr);
@@ -666,19 +663,6 @@ export class Renderer {
       const verts: number[] = [];
       for (const [a, b] of edges) verts.push(c[a][0], c[a][1], c[a][2], c[b][0], c[b][1], c[b][2]);
       this.drawLines(verts, BOX_RGB, mvp, 1, boxAlpha, false, 'test');
-    }
-
-    // The box face under the pointer, which a double click snaps the plane onto.
-    // Kept faint: it is a hint about what a gesture would do, not a feature of
-    // the data.
-    if (face) {
-      const verts: number[] = [];
-      for (let i = 0; i < 4; i++) {
-        const a = face.corners[i];
-        const b = face.corners[(i + 1) % 4];
-        verts.push(a[0], a[1], a[2], b[0], b[1], b[2]);
-      }
-      this.drawLines(verts, face.color, mvp, 2, FACE_ALPHA, false, 'off');
     }
 
     const poly = scene.planeOutline();

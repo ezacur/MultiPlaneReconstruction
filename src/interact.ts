@@ -1,6 +1,6 @@
 import type { vec3 } from 'gl-matrix';
 import { contentBox } from './layout';
-import { ELEVATION_LIMIT, type BoxFace, type PlaneSpace, type Ray, type Scene } from './scene';
+import { ELEVATION_LIMIT, type PlaneSpace, type Ray, type Scene } from './scene';
 import type { PlaneWidget } from './widget';
 
 type Mode = 'widget' | 'orbit' | 'wl';
@@ -14,8 +14,6 @@ interface Drag {
 
 export interface InteractionHooks {
   onChange(): void;
-  /** Which box face is under the pointer, or null. */
-  onFaceHover(face: BoxFace | null): void;
   /** Pointer over the plane; world position, or null when it is off it. */
   onProbe(world: vec3 | null): void;
   /** Put the camera back to its default framing. */
@@ -29,6 +27,9 @@ export interface InteractionHooks {
   /** A window / level drag starts (true) or ends (false). */
   onWindowGesture(active: boolean): void;
 }
+
+/** The keys for the grid's cartesian planes, by the axis that becomes normal. */
+const GRID_KEYS = ['i', 'j', 'k'];
 
 /** Two right presses this close in time and space make a right double click. */
 const RIGHT_DOUBLE_MS = 400;
@@ -53,10 +54,6 @@ export function attachInteraction(
     return scene.rayAt(mvp, ndcX, ndcY);
   };
 
-  const faceAt = (e: MouseEvent): BoxFace | null => {
-    const ray = rayAt(e);
-    return ray ? scene.pickBoxFace(ray) : null;
-  };
 
   const cursorFor = (): string => {
     if (drag?.mode === 'wl') return 'ew-resize';
@@ -140,7 +137,6 @@ export function attachInteraction(
 
     if (!drag) {
       const zoneChanged = widget.setHover(rayAt(e));
-      hooks.onFaceHover(faceAt(e));
       probeAt(e);
       if (zoneChanged) pane.style.cursor = cursorFor();
       hooks.onChange();
@@ -201,18 +197,19 @@ export function attachInteraction(
   pane.addEventListener('pointerleave', () => {
     if (drag) return;
     widget.clearHover();
-    hooks.onFaceHover(null);
     hooks.onProbe(null);
     hooks.onChange();
   });
 
   pane.addEventListener('dblclick', (e) => {
     if (!scene.vol) return;
-    // On the volume box, ask for the cartesian plane parallel to that face;
-    // out in the open, reframe the camera.
-    const face = faceAt(e);
-    if (face) hooks.onPlane('grid', face.axis);
-    else hooks.onResetCamera();
+    // On a coloured mark of the ring, swing the plane to that mark's cartesian
+    // plane. On the plane otherwise, nothing; out in the open, reframe the
+    // camera.
+    const ray = rayAt(e);
+    const mark = ray ? widget.markAt(ray) : null;
+    if (mark) hooks.onPlane('grid', mark.index);
+    else if (!ray || !widget.overPlane(ray)) hooks.onResetCamera();
   });
 
   const endDrag = (e: PointerEvent) => {
@@ -232,12 +229,22 @@ export function attachInteraction(
   pane.addEventListener('pointerup', endDrag);
   pane.addEventListener('pointercancel', endDrag);
 
-  // The only key of the view: Escape puts back what the drag in progress
-  // changed. Everything else is done with the mouse.
+  // Escape puts back what the drag in progress changed, and I, J and K swing
+  // the plane to the grid's cartesian planes. Nothing else is on the keyboard.
   window.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || !scene.vol || !widget.active) return;
-    widget.cancel();
-    drag = null;
-    hooks.onChange();
+    if (!scene.vol) return;
+    if (e.key === 'Escape') {
+      if (!widget.active) return;
+      widget.cancel();
+      drag = null;
+      hooks.onChange();
+      return;
+    }
+    // Leave Ctrl+J and the like to the browser, and typing to the inputs.
+    if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
+    const axis = GRID_KEYS.indexOf(e.key.toLowerCase());
+    if (axis >= 0) hooks.onPlane('grid', axis);
   });
 }

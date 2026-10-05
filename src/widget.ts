@@ -78,6 +78,21 @@ const STOP_R_OUT = 0.036;
 /** The grab windows on the band are kept at least this wide, so they still
  *  show with the snap set very small. */
 const WINDOW_MIN_HALF = (0.6 * Math.PI) / 180;
+/** A mark is hit over the whole width of the band, and at least this far
+ *  either side of its centre, so a thin one can still be aimed at. */
+const MARK_HIT_HALF = (3 * Math.PI) / 180;
+
+/** An angle brought into (-pi, pi]. */
+const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+
+/** A coloured window on the band: where a tilt can land on a grid plane. */
+interface GrabWindow {
+  centre: number;
+  half: number;
+  axis: vec3;
+  /** Which grid axis it leads to: 0 = I, 1 = J, 2 = K. */
+  index: number;
+}
 
 /** Depth cue for the guide curves: near is thick and solid, far is thin and faint. */
 const NEAR_WIDTH = 5.4;
@@ -264,6 +279,8 @@ export class PlaneWidget {
   private scene: Scene;
   private drag: DragState | null = null;
   private hovering: 'ring' | 'plane' | null = null;
+  /** The coloured mark under the pointer, by grid axis and angle, or null. */
+  private hoverMark: { index: number; centre: number } | null = null;
   /**
    * How present the band is, 0 to 1. It comes up while the pointer is over the
    * image or the band, or a drag is on, and sinks away otherwise, so at rest
@@ -314,9 +331,43 @@ export class PlaneWidget {
   setHover(ray: Ray | null): boolean {
     if (this.drag) return false;
     const next = ray === null ? null : this.pick(ray) ? 'ring' : this.overPlane(ray) ? 'plane' : null;
-    const changed = next !== this.hovering;
+    const mark = ray === null ? null : this.markAt(ray);
+    const changed =
+      next !== this.hovering ||
+      (mark === null) !== (this.hoverMark === null) ||
+      (mark !== null && this.hoverMark !== null && mark.index !== this.hoverMark.index);
     this.hovering = next;
+    this.hoverMark = mark;
     return changed;
+  }
+
+  /** The grid axis of the coloured mark under the pointer, or null. */
+  get hoveredMark(): number | null {
+    return this.hoverMark?.index ?? null;
+  }
+
+  /**
+   * The coloured mark a ray lands on, or null: anywhere across the band's
+   * width within the mark's stretch of angle. A double click there takes the
+   * plane to that mark's cartesian plane.
+   */
+  markAt(ray: Ray): { index: number; centre: number } | null {
+    const s = this.scene;
+    if (!s.vol || !this.pick(ray)) return null;
+    const hit = s.intersectPlane(ray);
+    if (!hit) return null;
+    const rel = vec3.sub(vec3.create(), hit, s.planePoint());
+    const a = Math.atan2(vec3.dot(rel, s.v), vec3.dot(rel, s.u));
+    let best: { index: number; centre: number } | null = null;
+    let bestD = Infinity;
+    for (const w of this.grabWindows()) {
+      const d = Math.abs(wrapAngle(a - w.centre));
+      if (d <= Math.max(w.half, MARK_HIT_HALF) && d < bestD) {
+        bestD = d;
+        best = { index: w.index, centre: w.centre };
+      }
+    }
+    return best;
   }
 
   /**
@@ -351,6 +402,7 @@ export class PlaneWidget {
 
   clearHover(): void {
     this.hovering = null;
+    this.hoverMark = null;
   }
 
   /** Tilting must be grabbed on the band; sliding works anywhere on the plane. */
@@ -489,21 +541,24 @@ export class PlaneWidget {
    * tilts the other way to the same plane. An axis the plane is already on
    * gets none: every tilt starts from it.
    */
-  private grabWindows(): { centre: number; half: number; axis: vec3 }[] {
+  private grabWindows(): GrabWindow[] {
     const s = this.scene;
     const axes = s.gridAxes();
     if (!axes) return [];
     const sinTol = Math.sin((Math.max(s.cartesianSnapDeg, 1e-3) * Math.PI) / 180);
-    const out: { centre: number; half: number; axis: vec3 }[] = [];
-    for (const g of axes) {
+    const out: GrabWindow[] = [];
+    axes.forEach((g, index) => {
       const gu = vec3.dot(g, s.u);
       const gv = vec3.dot(g, s.v);
       const L = Math.hypot(gu, gv);
-      if (L <= sinTol) continue;
+      if (L <= sinTol) return;
       const half = Math.max(WINDOW_MIN_HALF, Math.asin(sinTol / L));
       const p0 = Math.atan2(gv, gu);
-      out.push({ centre: p0, half, axis: g }, { centre: p0 + Math.PI, half, axis: g });
-    }
+      out.push(
+        { centre: p0, half, axis: g, index },
+        { centre: wrapAngle(p0 + Math.PI), half, axis: g, index },
+      );
+    });
     return out;
   }
 
@@ -586,9 +641,36 @@ export class PlaneWidget {
     // worked out from the plane as it is now, so during a drag they follow
     // the turn frame by frame.
     if (shown > 0.002) {
+      const hm = this.hoverMark;
       for (const w of this.grabWindows()) {
         const fill: number[] = [];
         arcBand(fill, centre, s.u, s.v, R * WINDOW_INNER, R * RING_OUTER, w.centre - w.half, w.centre + w.half);
+        const hot =
+          hm !== null && !d && hm.index === w.index && Math.abs(wrapAngle(hm.centre - w.centre)) < 1e-6;
+        if (hot) {
+          // The mark under the pointer shows its border: a thin outline of the
+          // coloured stretch itself, in its own colour at full strength. The
+          // double click is still taken across the whole band.
+          const a0 = w.centre - w.half;
+          const a1 = w.centre + w.half;
+          const rim: number[] = [];
+          const at = (a: number, r: number) =>
+            vec3.scaleAndAdd(
+              vec3.create(),
+              vec3.scaleAndAdd(vec3.create(), centre, s.u, Math.cos(a) * r),
+              s.v,
+              Math.sin(a) * r,
+            );
+          const n = Math.max(4, Math.ceil(((a1 - a0) / (Math.PI * 2)) * SEGMENTS * 2));
+          for (const r of [R * WINDOW_INNER, R * RING_OUTER]) {
+            for (let i = 0; i < n; i++) {
+              pushSeg(rim, at(a0 + ((a1 - a0) * i) / n, r), at(a0 + ((a1 - a0) * (i + 1)) / n, r));
+            }
+          }
+          pushSeg(rim, at(a0, R * WINDOW_INNER), at(a0, R * RING_OUTER));
+          pushSeg(rim, at(a1, R * WINDOW_INNER), at(a1, R * RING_OUTER));
+          out.push({ verts: rim, color: directionColor(w.axis), width: 1, depth: 'off' });
+        }
         out.push({
           verts: fill,
           color: directionColor(w.axis),
