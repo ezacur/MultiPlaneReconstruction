@@ -40,6 +40,8 @@ export interface LineBatch {
   alpha?: number;
   /** Draw as a triangle strip instead of separate line segments. */
   strip?: boolean;
+  /** Draw as separate triangles, three corners each. */
+  triangles?: boolean;
   /** Draw as a screen-space ribbon; verts are packed at RIBBON_STRIDE floats. */
   ribbon?: boolean;
   depth?: DepthMode;
@@ -221,7 +223,10 @@ interface GrabPoint {
  * and the cylindrical shading in the fragment stage, that is what makes a curve
  * looping in front of and behind the plane read as 3D.
  */
-function depthRibbon(
+/** Below this spread of depth, in mm, a ribbon is taken as flat. */
+const RIBBON_FLAT = 1e-2;
+
+export function depthRibbon(
   segments: [vec3, vec3][],
   forward: vec3,
   color: [number, number, number],
@@ -250,7 +255,11 @@ function depthRibbon(
   }
   const span = hi - lo;
   const at = (p: vec3): [number, number, number] => {
-    const t = span > 1e-6 ? (vec3.dot(p, forward) - lo) / span : 0;
+    // A curve with no real depth to it, such as a ring facing the camera, is
+    // drawn as all near. Its depths then differ only by rounding, and
+    // stretching that noise over the whole cue gave every frame a different
+    // width and opacity: it flickered.
+    const t = span > RIBBON_FLAT ? (vec3.dot(p, forward) - lo) / span : 0;
     // Smoothstep on the fade, so both ends hold and the change reads as depth
     // rather than as a linear ramp; the taper stays linear.
     const e = t * t * (3 - 2 * t);
@@ -435,12 +444,16 @@ export class PlaneWidget {
     this.lastTick = 0;
   }
 
-  /** Advance the fade to time `now`; true while it still has a way to go. */
-  tick(now: number): boolean {
+  /**
+   * Advance the fade to time `now`; true while it still has a way to go.
+   * `volumeMoving` keeps the box lit while the volume itself is being moved,
+   * by its pedestal: it shows what is moving, and fades once that stops.
+   */
+  tick(now: number, volumeMoving = false): boolean {
     const target = this.drag !== null || this.hovering !== null ? 1 : 0;
     // The hover zone is not updated during a drag, so a slide begun on the
     // image keeps the box lit and a tilt begun on the band keeps it out.
-    const boxTarget = this.hovering === 'plane' ? 1 : 0;
+    const boxTarget = this.hovering === 'plane' || volumeMoving ? 1 : 0;
     // Capped, so a frame after a long pause does not jump the whole fade.
     const dt = this.lastTick ? Math.min(0.1, (now - this.lastTick) / 1000) : 0;
     this.lastTick = now;

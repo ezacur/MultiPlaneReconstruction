@@ -195,6 +195,131 @@ Durante el giro, una **esfera hueca** sobre el arco marca cada angulo en el que
 el plano cae sobre una cartesiana, en el color que tomara el borde. Esta
 dimensionada para que la bolita del arrastre quepa dentro al engancharse.
 
+## El cuerpo y su pedestal
+
+Junto al volumen hay una superficie de cuerpo humano: Cesium Man, de las
+muestras glTF de Khronos (© 2017 Cesium, CC-BY 4.0), reducido a un busto.
+`tools/body-from-gltf.mjs` toma la malla en su pose de reposo, sin textura ni
+esqueleto, la gira a los ejes RAS del paciente (el modelo mira hacia +X con Z
+arriba: +X pasa a anterior, +Z a superior, +Y a izquierda, un giro y no un
+espejo), la escala a 1700 mm de estatura y la corta a media altura. Los
+triangulos que cruzan el corte se recortan con vertices nuevos sobre el, para
+que la base sea un borde limpio, y el corte queda en S = 0. El resultado,
+`public/models/body.json`, son unos 2700 vertices y 3600 triangulos.
+
+El cuerpo se dibuja como una sombra: luz desde el ojo, opacidad baja donde la
+superficie mira a la camara y alta en el contorno, solo las caras delanteras,
+con mezcla y sin escribir profundidad, y despues del corte, de modo que el
+corte y el volumen se ven a traves y el cuerpo se lee por su silueta.
+
+Donde el cuerpo cruza el plano de corte se dibuja una linea roja. Se calcula en
+cada frame: cada triangulo del cuerpo, alli donde lo haya puesto el pedestal,
+que tiene esquinas a los dos lados del plano da un segmento entre los dos
+puntos donde sus aristas lo cruzan (una esquina sobre el plano cuenta como de
+un lado, para no contar dos veces un cruce). Los segmentos se recortan a la
+imagen, la parte del plano dentro del volumen, en el espacio de voxel, donde la
+caja esta alineada con los ejes. Con la malla del busto son unos pocos miles de
+triangulos y el contorno sale cerrado; como esta en el propio plano, se dibuja
+encima de la imagen en vez de competir con ella en profundidad.
+
+El volumen, el plano y su anillo estan quietos en la escena. El cuerpo vive en
+su propio espacio, y una transformacion rigida, `scene.bodyModel`, lo coloca en
+la escena; es lo unico que mueve el **pedestal**. Al cargar, el cuerpo se coloca
+con el ombligo (el 20 por ciento de la altura del busto, unos 170 mm sobre el
+corte) en el centro del volumen y mirando como el paciente.
+
+El pedestal es un cilindro bajo el corte de la cadera: el eje va hacia arriba
+del cuerpo, la tapa esta contra el corte, el radio abarca la seccion del corte
+con un margen y la altura es un 39 por ciento del radio. En reposo es una forma
+translucida y tenue. Cada una de sus tres partes, el borde de la tapa, su
+centro y el lateral, se vuelve solida y sombreada por separado mientras el
+puntero esta sobre ella o mientras un arrastre la tiene cogida; el resto sigue
+tenue. Solida, escribe
+profundidad para ocultar lo que tiene detras y se sombrea con una luz desde el
+ojo. Cada parte muestra su guia ya al pasar por encima: el borde, el arco de la
+inclinacion, de -60 a +60 grados; el centro, la linea del desplazamiento a lo
+largo del eje por el punto agarrado; el lateral, el circulo alrededor del eje
+que recorre el punto agarrado al girar, un poco por fuera de la superficie
+para no confundirse con las estrias. Las tres se calculan en la escena, asi
+que durante el gesto se quedan quietas aunque el pedestal se mueva, y se
+dibujan sin prueba de profundidad: el arco pasa bajo el corte y se mete en el
+pedestal, y probado contra la profundidad quedaria casi todo oculto. El lateral va estriado, 32 estrias alternas claras y oscuras, para que
+el giro sobre el eje se vea; el borde de la tapa es liso. Durante el arrastre la
+caja del volumen se enciende, y al soltar se desvanece con su fundido largo.
+Sus gestos:
+
+| Zona | Boton | Gesto |
+| --- | --- | --- |
+| Borde de la tapa (del 0.6 al 1 del radio) | izquierdo | Inclinar alrededor del centro de la tapa |
+| Centro de la tapa | izquierdo o central | Desplazar a lo largo del eje |
+| Borde de la tapa | central | Desplazar a lo largo del eje |
+| Lateral | izquierdo | Girar sobre el eje |
+| Lateral | central | Mover en el plano de la pantalla |
+| Lateral | derecho | Mover en el plano perpendicular al eje |
+
+En el centro del cuerpo, el de la caja del busto, hay un gizmo de rotacion
+tradicional: tres anillos de radio el 28 por ciento del del pedestal, sobre los
+ejes R, A y S del cuerpo, en rojo, verde y azul, que giran el cuerpo alrededor
+de ese centro. Se cogen antes que todo lo demas, el anillo y la imagen del plano
+de corte incluidos, si el puntero pasa a menos del 8 por ciento de su radio de
+uno de ellos: son finos y, donde se ven, se pueden coger. Se dibujan sin prueba
+de profundidad, para que se vean a traves del cuerpo, y el anillo ofrecido o
+cogido se dibuja mas grueso. Completan el gizmo un circulo exterior blanco, un
+30 por ciento mayor y siempre de frente a la camara, que gira el cuerpo
+alrededor de la linea de vision (su eje se fija al pulsar, para que el giro no
+cambie de eje si la vista del cuerpo cambia), y un centro, un disco blanco con
+cuatro flechas, que lo mueve en el plano de la pantalla.
+
+El pedestal y el gizmo se desvanecen cuando no se usan. Aparecen en 0.25
+segundos mientras se arrastran o el puntero esta sobre el pedestal, el gizmo o
+el propio cuerpo (el rayo se prueba contra los triangulos del busto), se
+mantienen 10 segundos tras el ultimo uso y se apagan en 1.5. Durante esa espera
+no hace falta redibujar: la app programa un unico redibujado para cuando toca
+empezar el fundido. Mientras se desvanecen ninguna parte escribe profundidad,
+para no tapar nada a medio camino.
+
+Un detalle de las cintas con profundidad (las guias y los anillos): su grosor y
+su opacidad se reparten entre el punto mas cercano y el mas lejano de la curva.
+En una curva sin profundidad, como el circulo blanco, que mira a la camara, esa
+diferencia es solo ruido de redondeo, y repartirla daba en cada frame un grosor
+y una opacidad al azar: el circulo parpadeaba. Por debajo de una centesima de
+milimetro de profundidad la cinta se trata como plana.
+
+Los giros del gizmo, del lateral y del borde de la tapa se leen por arrastre
+tangencial, como en los
+editores 3D: el angulo es lo que el puntero ha recorrido en pantalla a lo largo
+de la imagen de la tangente del punto agarrado, dividido por su radio. Cada
+pixel es siempre la misma fraccion de giro. Leer el angulo de la posicion del
+puntero sobre el plano del anillo, o del punto donde corta el lateral, daba
+tirones: cerca de la silueta del cilindro, o con el anillo visto inclinado o el
+puntero cerca de su centro, un pixel valia muchos grados, y el cuerpo se veia
+temblar al girarlo. Como la camara es ortografica, todos los rayos comparten
+direccion y su origen se desplaza con el puntero, que es lo que se mide. Si la
+tangente se ve casi de punta, su longitud en pantalla se toma como minimo un 30
+por ciento del radio, para que el giro no se dispare.
+
+Como los del plano, son absolutos: cada paso se calcula desde la transformacion
+con que empezo el arrastre, y los rayos y la direccion de la camara se llevan al
+espacio del cuerpo con ella, no con la que va cambiando. La inclinacion proyecta
+el puntero sobre el arco del punto agarrado, de -60 a +60 grados, alrededor de
+un eje en la tapa que pasa por su centro, perpendicular al radio agarrado; como
+el centro de la tapa esta en el espacio del cuerpo, gira alrededor de donde este
+la tapa en ese momento. El giro sobre el eje toma el punto donde el puntero
+corta el lateral por la cara que se ve: un rayo atraviesa el cilindro dos veces,
+y quedarse con el corte de detras haria girar al reves. Fuera de la silueta usa
+el punto del circulo agarrado mas cercano al rayo, que enlaza sin salto con el
+borde. Los desplazamientos siguen el puntero sobre el plano de la pantalla, o
+sobre el plano perpendicular al eje, por el punto agarrado, y se quedan quietos
+si ese plano se ve de canto.
+
+El encuadre de la camara abarca la caja del volumen, la caja del cuerpo y el
+pedestal, donde esten. Se fija al reencuadrar (al cargar, o con un doble clic
+en el vacio) y no se recalcula en cada frame: si lo hiciera, la escala de la
+vista seguiria al cuerpo mientras el pedestal lo mueve, y la camara se moveria
+bajo el gesto. La profundidad de la camara se extiende de sobra a los
+dos lados del punto de mira, para que el pedestal pueda alejar el cuerpo sin
+recortarlo.
+
 ## El color del borde
 
 El borde de la imagen toma el color de las coordenadas de la normal: la
@@ -429,6 +554,8 @@ En `public/data`, descargados de
 | `src/nifti.ts` | Lee la cabecera y los datos, aplica `scl_slope`/`scl_inter`, y expone la affine voxel a mundo. |
 | `src/scene.ts` | El plano, el pivote, los planos cartesianos, las transiciones animadas del plano y de la camara, el color direccional, el recorte del plano contra el volumen, la camara 3D, el marcador de ejes y el lanzado de rayos. |
 | `src/widget.ts` | El manipulador: el anillo, el ciclo del arrastre y la geometria de las guias. |
+| `src/pedestal.ts` | El pedestal del cuerpo: geometria, zonas y gestos que lo mueven en la escena. |
+| `tools/body-from-gltf.mjs` | Genera `public/models/body.json` desde el glTF de Cesium Man. |
 | `src/renderer.ts` | WebGL2: textura 3D, shader de reslice, la vista y el dibujo de lineas. |
 | `src/interact.ts` | Raton, rueda y las teclas I, J, K y Esc. |
 | `src/quantise.ts` | El snap de la normal a los ejes cartesianos de la rejilla. |

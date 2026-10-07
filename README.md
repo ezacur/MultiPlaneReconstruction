@@ -15,6 +15,8 @@ cuesta lo mismo que uno axial.
 - un manipulador 3D (el anillo) para inclinar y deslizar el plano, que indica
   desde donde se llega a cada plano cartesiano y deja el plano sobre ellos con
   un leve iman;
+- una silueta de cuerpo humano (un busto) sobre un pedestal, que se gira y se
+  mueve alrededor del volumen para ver en que parte del cuerpo cae el estudio;
 - una barra de grises interactiva con histograma: ventana / nivel, deformacion
   de la rampa, colores de saturacion e iman de percentiles;
 - lineas de nivel (isolineas) sobre el corte, en vivo o fijadas;
@@ -162,6 +164,61 @@ de la rejilla del volumen, el plano se asienta exactamente sobre el gracias a un
 iman de 2.5 grados. El plano nunca se sale del volumen: si al girar quedaria
 fuera, se mantiene dentro, junto a la cara mas cercana.
 
+### El cuerpo y su pedestal
+
+En el centro del cuerpo hay un **gizmo de rotacion** como el de los editores
+3D: tres anillos pequenos sobre los ejes del propio cuerpo, rojo para R, verde
+para A y azul para S, que giran el cuerpo sobre ese eje alrededor de su centro;
+un circulo exterior blanco, siempre de frente a la camara, que lo gira alrededor
+de la linea de vision; y un centro con cuatro flechas que lo mueve en el plano
+de la pantalla. La pieza bajo el raton se resalta.
+
+El pedestal y el gizmo se desvanecen cuando no se usan: aparecen en un cuarto de
+segundo en cuanto el raton pasa por el cuerpo, el pedestal o el gizmo, siguen
+visibles unos 10 segundos despues de dejar de usarlos y luego se apagan. Se
+pueden coger aunque esten ocultos: pasar por encima los hace aparecer. Los anillos se cogen antes que
+cualquier otra cosa, el plano de corte incluido: son finos y, donde se ven, se
+pueden coger.
+
+Junto al volumen hay una **silueta de cuerpo humano**: un busto (tronco, brazos
+y cabeza) dibujado como una sombra translucida, mas marcada en el contorno, para
+que el volumen y el corte se vean a traves. Esta en las mismas coordenadas del
+paciente que el volumen y arranca con el ombligo en el centro del volumen, lo
+que encaja con un TC de abdomen; para otras regiones se recoloca a mano.
+
+Donde el cuerpo atraviesa el plano de corte se dibuja una **linea roja** sobre
+la imagen: la seccion del cuerpo a esa altura, que dice de un vistazo como
+encaja el estudio en el contorno del cuerpo.
+
+El busto descansa sobre un **pedestal**, un cilindro bajo el corte de la cadera,
+y es el pedestal lo que lo mueve. El volumen y el plano de corte no se mueven:
+se lleva el cuerpo hasta el estudio, no al reves.
+
+| Donde | Boton | Que hace |
+| --- | --- | --- |
+| Borde de la tapa | izquierdo | Inclina el cuerpo alrededor del centro de la tapa |
+| Anillo del gizmo, en el centro del cuerpo | izquierdo | Gira el cuerpo sobre ese eje: rojo R, verde A, azul S |
+| Circulo blanco del gizmo | izquierdo | Lo gira alrededor de la linea de vision |
+| Centro del gizmo | izquierdo | Lo mueve en el plano de la pantalla |
+| Centro de la tapa | izquierdo o central | Lo desplaza a lo largo del eje del pedestal |
+| Borde de la tapa | central | Tambien lo desplaza a lo largo del eje |
+| Lateral | izquierdo | Lo gira sobre el eje del pedestal, arrastrando el punto agarrado |
+| Lateral | central | Lo mueve libremente, en el plano de la pantalla |
+| Lateral | derecho | Lo mueve en el plano perpendicular al eje del pedestal |
+
+La parte del pedestal bajo el raton, o la que se esta arrastrando, se vuelve
+solida y sombreada, como el anillo se adelanta al ofrecerse; el lateral lleva
+estrias que dejan ver el giro sobre su eje, y la caja
+del volumen se enciende para mostrar donde queda el estudio; al soltar, la caja
+se desvanece. El centro de la inclinacion es el de la tapa alli donde este, asi
+que sigue al pedestal cuando se ha movido. Cada parte del pedestal (el borde
+de la tapa, su centro y el lateral) se resalta por separado al pasar el raton,
+y cada una muestra ya entonces su guia: el borde, el arco de la inclinacion,
+de -60 a +60 grados; el centro, la linea del desplazamiento a lo largo del eje;
+y el lateral, el circulo que recorre el punto agarrado al girar. **Esc** deshace el
+gesto en curso, y un **doble clic en el vacio** reencuadra la camara sobre el
+volumen, el cuerpo y el pedestal alli donde esten.
+
 ### Ir a un plano cartesiano
 
 Los planos cartesianos son los de la rejilla de adquisicion del volumen, con
@@ -191,7 +248,7 @@ sobre una cartesiana.
 | Acercar o alejar | **Rueda** fuera del plano |
 | Mirar a lo largo de un eje del paciente | **Clic** en la letra **R**, **A** o **S** del marcador de ejes; otro clic, desde el lado opuesto |
 | Mirar el corte de frente | **Doble clic derecho** sobre la imagen |
-| Volver al encuadre inicial | **Doble clic** en el vacio |
+| Volver al encuadre inicial | **Doble clic** en el vacio (encuadra el volumen y el cuerpo donde esten) |
 
 Las coordenadas son las del paciente en convencion RAS: R derecha, A anterior,
 S superior. El marcador de la esquina sigue a la camara.
@@ -265,6 +322,11 @@ con licencia BSD-2-Clause (ver `public/data/LICENSE`).
 | `CT_pitch.nii.gz` | TC de craneo adquirido con el gantry inclinado unos 16 grados: el plano de adquisicion no coincide con el axial del paciente, el caso que mejor muestra para que sirve el MPR. |
 | `mni152.nii.gz` | Plantilla de RM cerebral MNI152. |
 
+La silueta del cuerpo sale de **Cesium Man**, de las
+[muestras glTF de Khronos](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CesiumMan),
+© 2017 Cesium, con licencia CC-BY 4.0. Solo se usa su geometria, recortada a
+media altura (ver `public/models/LICENSE.md`).
+
 Para ver las dimensiones, el espaciado y la affine de un fichero sin abrir la
 aplicacion:
 
@@ -296,6 +358,9 @@ node tools/niftiinfo.mjs ruta/al/fichero.nii.gz
 | `src/nifti.ts` | Lectura de NIfTI: cabecera, datos, escalado y affine voxel a mundo. |
 | `src/scene.ts` | El estado: el plano, la camara, los planos cartesianos, las transiciones animadas y la geometria de seleccion. |
 | `src/widget.ts` | El manipulador: anillo, marcas, eje, arco, guias y el ciclo de arrastre. |
+| `src/pedestal.ts` | El pedestal del cuerpo: su geometria, sus zonas y los gestos que lo mueven. |
+| `public/models/body.json` | La superficie del cuerpo, un busto, generada desde CesiumMan. |
+| `tools/body-from-gltf.mjs` | Convierte el modelo glTF de CesiumMan en `body.json`: rota a RAS, escala y corta a media altura. |
 | `src/renderer.ts` | WebGL2: textura 3D, shader de corte con lineas de nivel, y dibujo de lineas y cintas. |
 | `src/interact.ts` | Raton, rueda y teclado de la vista. |
 | `src/colorbar.ts` | La barra de grises: histograma, limites, rampa, percentiles y lineas de nivel. |
@@ -320,5 +385,6 @@ Para entender o modificar el codigo, empieza por
 ## Licencia
 
 Los volumenes de ejemplo tienen licencia BSD-2-Clause (ver
-`public/data/LICENSE`). El repositorio todavia no incluye una licencia para el
-codigo.
+`public/data/LICENSE`). La silueta del cuerpo deriva de Cesium Man, © 2017
+Cesium, CC-BY 4.0 (ver `public/models/LICENSE.md`). El repositorio todavia no
+incluye una licencia para el codigo.

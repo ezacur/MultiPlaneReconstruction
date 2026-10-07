@@ -8,8 +8,10 @@ import {
   directionLabel,
   GRID_AXIS_NAMES,
   Scene,
+  type BodyMesh,
   type PlaneSpace,
 } from './scene';
+import { Pedestal } from './pedestal';
 import { PlaneWidget } from './widget';
 
 const SAMPLES = [
@@ -44,6 +46,7 @@ const fileInput = $<HTMLInputElement>('#file');
 
 const scene = new Scene();
 const widget = new PlaneWidget(scene);
+const pedestal = new Pedestal(scene);
 const colorbar = new Colorbar($<HTMLElement>('#colorbar'), {
   onLimits: (lo, hi) => {
     scene.windowWidth = Math.max(1e-6, hi - lo);
@@ -77,6 +80,7 @@ try {
 
 let probe: vec3 | null = null;
 let pending = false;
+let fadeTimer: ReturnType<typeof setTimeout> | undefined;
 
 function setStatus(text: string, isError = false): void {
   statusEl.textContent = text;
@@ -99,11 +103,20 @@ function requestRender(): void {
     // settles. Both are ticked: neither may be skipped by the other.
     const plane = scene.tickTransition(now);
     const camera = scene.tickCamera(now);
-    const ring = widget.tick(now);
-    const animating = plane || camera || ring;
-    renderer.render(scene, widget, paneRect());
+    const ring = widget.tick(now, pedestal.active);
+    const ped = pedestal.tick(now);
+    const animating = plane || camera || ring || ped;
+    renderer.render(scene, widget, paneRect(), pedestal.geometry());
     updateOverlays();
     if (animating) requestRender();
+    else {
+      // The pedestal held up after use: come back when its fade is due.
+      const wait = pedestal.untilFade(now);
+      if (wait !== null) {
+        clearTimeout(fadeTimer);
+        fadeTimer = setTimeout(requestRender, wait + 20);
+      }
+    }
   });
 }
 
@@ -140,8 +153,28 @@ function updateOverlays(): void {
     `normal hacia ${directionLabel(scene.n)}, ${fmt(scene.distance)} mm del centro${thick}`;
 
   const st = widget.state;
+  const pg = pedestal.gesture;
+  const pz = pedestal.zone;
+  const ring = pedestal.gizmoRing;
+  const ringName = ring === null ? '' : ['R', 'A', 'S'][ring];
+  const pedestalHint =
+    pg === 'gizmo' && ring === 3 ? 'girando el cuerpo en el plano de la vista'
+    : pg === 'gizmo' ? `girando el cuerpo sobre su eje ${ringName}`
+    : pz === 'gizmo' && ring === 4 ? 'arrastrar mueve el cuerpo'
+    : pz === 'gizmo' && ring === 3 ? 'arrastrar gira el cuerpo en el plano de la vista'
+    : pz === 'gizmo' ? `arrastrar gira el cuerpo sobre su eje ${ringName}`
+    : pg === 'tilt' ? 'inclinando el cuerpo'
+    : pg === 'axial' ? 'desplazando el cuerpo por el eje del pedestal'
+    : pg === 'spin' ? 'girando el cuerpo sobre el eje del pedestal'
+    : pg === 'free' ? 'moviendo el cuerpo'
+    : pg === 'planar' ? 'desplazando el cuerpo en el plano del pedestal'
+    : pz === 'rim' ? 'izquierdo inclina el cuerpo; central lo desplaza por el eje'
+    : pz === 'cap' ? 'arrastrar desplaza el cuerpo por el eje del pedestal'
+    : pz === 'side' ? 'izquierdo gira el cuerpo; central lo mueve; derecho, en el plano del pedestal'
+    : '';
   hintEl.textContent =
-    widget.hoveredMark !== null
+    pedestalHint ? pedestalHint
+    : widget.hoveredMark !== null
       ? `doble clic: plano de normal ${GRID_AXIS_NAMES[widget.hoveredMark]}`
       : st === 'translate'
       ? 'deslizando por la normal'
@@ -202,6 +235,7 @@ async function loadBuffer(buf: ArrayBuffer, name: string): Promise<void> {
   colorbar.setVolume(vol);
   widget.clearHover();
   widget.reveal();
+  pedestal.reveal();
   probe = null;
 
   showVolumeInfo(vol);
@@ -277,7 +311,7 @@ axisEls.forEach((el, i) => {
   });
 });
 
-attachInteraction(pane, scene, widget, {
+attachInteraction(pane, scene, widget, pedestal, {
   onChange: requestRender,
   onProbe: (w) => {
     probe = w;
@@ -306,3 +340,33 @@ window.addEventListener('resize', requestRender);
 
 sampleSel.value = DEFAULT_SAMPLE;
 void guarded(() => loadUrl(`data/${DEFAULT_SAMPLE}`, DEFAULT_SAMPLE));
+
+/**
+ * The body surface that stands beside the volume on its pedestal: loaded once,
+ * on its own, so a missing or slow model never holds the volume up.
+ */
+async function loadBody(): Promise<void> {
+  const res = await fetch('models/body.json');
+  if (!res.ok) throw new Error(`No se pudo cargar el cuerpo (HTTP ${res.status})`);
+  const j = (await res.json()) as { positions: number[]; normals: number[]; indices: number[] };
+  const positions = Float32Array.from(j.positions);
+  const min = vec3.fromValues(Infinity, Infinity, Infinity);
+  const max = vec3.fromValues(-Infinity, -Infinity, -Infinity);
+  for (let i = 0; i < positions.length; i += 3) {
+    const p = positions.subarray(i, i + 3) as unknown as vec3;
+    vec3.min(min, min, p);
+    vec3.max(max, max, p);
+  }
+  const mesh: BodyMesh = {
+    positions,
+    normals: Float32Array.from(j.normals),
+    indices: Uint16Array.from(j.indices),
+    min,
+    max,
+  };
+  renderer.setBody(mesh);
+  scene.setBody(mesh);
+  pedestal.reveal();
+  requestRender();
+}
+loadBody().catch((err) => console.error(err));

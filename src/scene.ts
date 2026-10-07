@@ -18,6 +18,11 @@ import { snapToAxes } from './quantise';
  * special case: it is just a frame that is not aligned with the voxel grid or
  * the world axes.
  *
+ * The volume, the plane and its ring stay put in the scene. A human body
+ * surface stands beside them on a pedestal, in its own space: `bodyModel`
+ * places that space in the scene, a rigid move the pedestal drives, so the
+ * body can be brought round the volume to show where the scan lies in it.
+ *
  * World coordinates are NIfTI's RAS+ convention, in millimetres.
  */
 
@@ -44,6 +49,46 @@ export interface TriadAxis {
 
 /** Size of the corner axis marker, as a fraction of the pane's half-height. */
 const TRIAD_RADIUS = 0.13;
+
+/** The body surface, a bust, in its own space: RAS, millimetres, the cut
+ *  across the hips at S = 0. */
+export interface BodyMesh {
+  positions: Float32Array;
+  normals: Float32Array;
+  indices: Uint16Array;
+  /** Bounding box. */
+  min: vec3;
+  max: vec3;
+}
+
+/** The pedestal's cylinder, in the body's space. */
+export interface PedestalShape {
+  /** Centre of the cap, at the base of the body. */
+  c: vec3;
+  /** The axis, unit, up the body. */
+  a: vec3;
+  /** Two unit directions across the axis, completing a right-handed frame. */
+  e1: vec3;
+  e2: vec3;
+  /** Radius, and height down from the cap. */
+  r: number;
+  h: number;
+}
+
+/** The pedestal's radius over the circle round the body's base... */
+const PEDESTAL_MARGIN = 1.35;
+/** ...and never less than this fraction of the body's height. */
+const PEDESTAL_MIN_RADIUS = 0.14;
+/** The base the pedestal takes in: the lowest stretch of the body, this
+ *  fraction of its height. The body is a bust cut at the hips, and the hands
+ *  hang just above the cut, so it is kept thin enough to leave them out. */
+const BASE_FRACTION = 0.02;
+/** Height of the navel, as a fraction of the bust's: the cut is at half the
+ *  1700 mm stature and the navel about 170 mm above it. Where the body is
+ *  stood against the volume's centre. */
+const NAVEL_HEIGHT = 0.2;
+/** The pedestal's height, as a fraction of its radius. */
+const PEDESTAL_HEIGHT = 0.39;
 
 /** An orthonormal right-handed plane frame. */
 export interface Frame {
@@ -184,6 +229,22 @@ export class Scene {
 
   camera = { azimuth: -0.7, elevation: 0.62, zoom: 1.15 };
 
+  /** The scene point the camera orbits and frames, set by resetCamera(). */
+  readonly target: vec3 = vec3.create();
+  /** The radius the camera frames, fixed with the target by resetCamera().
+   *  Worked out each frame instead, it would follow the body as the pedestal
+   *  moves it, and the view would breathe under the gesture. */
+  private frameRadius = 1;
+
+  /** The body surface, a bust, in its own space (RAS, mm, the cut at
+   *  S = 0), or null until it has loaded. */
+  body: BodyMesh | null = null;
+  /**
+   * Where the body's space sits in the scene: a rigid move, rotation and
+   * translation, set by the pedestal. Placed on load by placeBody().
+   */
+  bodyModel: mat4 = mat4.create();
+
   /** Which preset the plane currently matches, or null once freely rotated. */
   preset: { space: PlaneSpace; axis: number } | null = null;
 
@@ -197,6 +258,7 @@ export class Scene {
     this.windowWidth = Math.max(vol.max - vol.min, 1e-3);
     this.windowLevel = (vol.max + vol.min) / 2;
     this.slabMm = 0;
+    this.placeBody();
     this.resetCamera();
     this.volumeCentre(this.pivot);
     this.distance = 0;
@@ -231,6 +293,109 @@ export class Scene {
       }
     }
     return out;
+  }
+
+  /** Give the scene the body surface, and stand it by the volume. */
+  setBody(mesh: BodyMesh): void {
+    this.body = mesh;
+    this.placeBody();
+    this.resetCamera();
+  }
+
+  /**
+   * Stand the body so that its navel is at the centre of the volume, facing
+   * the same way as the patient: a start that suits an abdominal scan, and
+   * that the pedestal can change.
+   */
+  placeBody(): void {
+    const body = this.body;
+    if (!body) return;
+    const navel = vec3.fromValues(0, 0, (body.max[2] - body.min[2]) * NAVEL_HEIGHT + body.min[2]);
+    const at = this.vol ? this.volumeCentre() : vec3.create();
+    mat4.fromTranslation(this.bodyModel, vec3.sub(vec3.create(), at, navel));
+  }
+
+  /**
+   * The pedestal the body stands on, in the body's space: a cylinder under
+   * the bust's cut, its axis up the body (+S) and its cap against the cut,
+   * wide enough to take it.
+   */
+  pedestalShape(): PedestalShape | null {
+    const body = this.body;
+    if (!body) return null;
+    const P = body.positions;
+    const height = body.max[2] - body.min[2];
+    // The base: everything in the lowest stretch of the body, the cut.
+    const baseTop = body.min[2] + height * BASE_FRACTION;
+    let lo0 = Infinity, lo1 = Infinity, hi0 = -Infinity, hi1 = -Infinity;
+    for (let i = 0; i < P.length; i += 3) {
+      if (P[i + 2] > baseTop) continue;
+      lo0 = Math.min(lo0, P[i]);
+      hi0 = Math.max(hi0, P[i]);
+      lo1 = Math.min(lo1, P[i + 1]);
+      hi1 = Math.max(hi1, P[i + 1]);
+    }
+    if (!isFinite(lo0)) return null;
+    const c = vec3.fromValues((lo0 + hi0) / 2, (lo1 + hi1) / 2, body.min[2]);
+    let r = 0;
+    for (let i = 0; i < P.length; i += 3) {
+      if (P[i + 2] > baseTop) continue;
+      r = Math.max(r, Math.hypot(P[i] - c[0], P[i + 1] - c[1]));
+    }
+    r = Math.max(r * PEDESTAL_MARGIN, height * PEDESTAL_MIN_RADIUS);
+    return {
+      c,
+      a: vec3.fromValues(0, 0, 1),
+      e1: vec3.fromValues(1, 0, 0),
+      e2: vec3.fromValues(0, 1, 0),
+      r,
+      h: r * PEDESTAL_HEIGHT,
+    };
+  }
+
+  /**
+   * What the camera frames, in the scene: a sphere round the volume's box, the
+   * body's box and the pedestal's top and bottom circles, the last two where
+   * the pedestal has put them.
+   */
+  private framing(): { centre: vec3; radius: number } {
+    const pts = this.corners();
+    const body = this.body;
+    if (body) {
+      const m = this.bodyModel;
+      for (let k = 0; k < 8; k++) {
+        const p = vec3.fromValues(
+          k & 1 ? body.max[0] : body.min[0],
+          k & 2 ? body.max[1] : body.min[1],
+          k & 4 ? body.max[2] : body.min[2],
+        );
+        pts.push(vec3.transformMat4(p, p, m));
+      }
+      const ped = this.pedestalShape();
+      if (ped) {
+        for (const height of [0, -ped.h]) {
+          for (let i = 0; i < 32; i++) {
+            const ang = (i / 32) * Math.PI * 2;
+            const p = vec3.scaleAndAdd(vec3.create(), ped.c, ped.a, height);
+            vec3.scaleAndAdd(p, p, ped.e1, Math.cos(ang) * ped.r);
+            vec3.scaleAndAdd(p, p, ped.e2, Math.sin(ang) * ped.r);
+            pts.push(vec3.transformMat4(p, p, m));
+          }
+        }
+      }
+    }
+    if (pts.length === 0) return { centre: this.volumeCentre(), radius: this.radius() };
+    // The centre of their bounding box, and the farthest of them from it.
+    const lo = vec3.clone(pts[0]);
+    const hi = vec3.clone(pts[0]);
+    for (const p of pts) {
+      vec3.min(lo, lo, p);
+      vec3.max(hi, hi, p);
+    }
+    const centre = vec3.lerp(vec3.create(), lo, hi, 0.5);
+    let radius = 1;
+    for (const p of pts) radius = Math.max(radius, vec3.distance(p, centre));
+    return { centre, radius };
   }
 
   /** Radius of the sphere enclosing the volume. */
@@ -653,6 +818,93 @@ export class Scene {
     return poly.map((p) => vec3.transformMat4(p, p, vol.voxelToWorld));
   }
 
+  /**
+   * Where the body surface crosses the slice: line segments in the scene,
+   * flattened as [x1, y1, z1, x2, y2, z2, ...], kept to the image, the part
+   * of the plane inside the volume. Each triangle of the body, where the
+   * pedestal has put it, that has corners on both sides of the plane gives
+   * one segment, between the two points where its edges cross.
+   */
+  bodyContour(): number[] {
+    const body = this.body;
+    const vol = this.vol;
+    if (!body || !vol) return [];
+    const P = body.positions;
+    const m = this.bodyModel;
+    const c = this.planePoint();
+    const n = this.n;
+    const count = P.length / 3;
+    // The body's corners in the scene, and their signed distances to the plane.
+    const W = new Float32Array(P.length);
+    const D = new Float32Array(count);
+    for (let i = 0; i < count; i++) {
+      const x = P[i * 3];
+      const y = P[i * 3 + 1];
+      const z = P[i * 3 + 2];
+      const wx = m[0] * x + m[4] * y + m[8] * z + m[12];
+      const wy = m[1] * x + m[5] * y + m[9] * z + m[13];
+      const wz = m[2] * x + m[6] * y + m[10] * z + m[14];
+      W[i * 3] = wx;
+      W[i * 3 + 1] = wy;
+      W[i * 3 + 2] = wz;
+      D[i] = (wx - c[0]) * n[0] + (wy - c[1]) * n[1] + (wz - c[2]) * n[2];
+    }
+    const at = (a: number, b: number): vec3 => {
+      const t = D[a] / (D[a] - D[b]);
+      return vec3.fromValues(
+        W[a * 3] + (W[b * 3] - W[a * 3]) * t,
+        W[a * 3 + 1] + (W[b * 3 + 1] - W[a * 3 + 1]) * t,
+        W[a * 3 + 2] + (W[b * 3 + 2] - W[a * 3 + 2]) * t,
+      );
+    };
+    const out: number[] = [];
+    const I = body.indices;
+    const lo = -0.5;
+    const hi = [vol.dims[0] - 0.5, vol.dims[1] - 0.5, vol.dims[2] - 0.5];
+    for (let k = 0; k < I.length; k += 3) {
+      const tri = [I[k], I[k + 1], I[k + 2]];
+      // A corner on the plane counts as above it, so no crossing is counted twice.
+      const above = tri.map((v) => D[v] >= 0);
+      if (above[0] === above[1] && above[1] === above[2]) continue;
+      const ends: vec3[] = [];
+      for (let e = 0; e < 3; e++) {
+        const a = tri[e];
+        const b = tri[(e + 1) % 3];
+        if (above[e] !== above[(e + 1) % 3]) ends.push(at(a, b));
+      }
+      if (ends.length !== 2) continue;
+      // Keep the stretch inside the volume: clipped in voxel space, where the
+      // box is axis aligned, which is the same stretch in the scene.
+      const v0 = vec3.transformMat4(vec3.create(), ends[0], vol.worldToVoxel);
+      const v1 = vec3.transformMat4(vec3.create(), ends[1], vol.worldToVoxel);
+      let t0 = 0;
+      let t1 = 1;
+      for (let ax = 0; ax < 3 && t0 <= t1; ax++) {
+        const d = v1[ax] - v0[ax];
+        for (const [bound, sign] of [
+          [lo, -1],
+          [hi[ax], 1],
+        ] as [number, number][]) {
+          // Inside means sign * (v - bound) <= 0.
+          const num = sign * (bound - v0[ax]);
+          const den = sign * d;
+          if (Math.abs(den) < 1e-12) {
+            if (num < 0) t1 = -1;
+            continue;
+          }
+          const t = num / den;
+          if (den > 0) t1 = Math.min(t1, t);
+          else t0 = Math.max(t0, t);
+        }
+      }
+      if (t0 >= t1) continue;
+      const p0 = vec3.lerp(vec3.create(), ends[0], ends[1], t0);
+      const p1 = vec3.lerp(vec3.create(), ends[0], ends[1], t1);
+      out.push(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2]);
+    }
+    return out;
+  }
+
   /** A human name for the current plane, with the obliquity called out. */
   planeName(): string {
     const axis = dominantAxis(this.n);
@@ -689,6 +941,29 @@ export class Scene {
   resetCamera(): void {
     this.cameraMove = null;
     this.camera = { azimuth: -0.7, elevation: 0.62, zoom: 1.15 };
+    // Frame the volume, the body and its pedestal where they are.
+    const frame = this.framing();
+    vec3.copy(this.target, frame.centre);
+    this.frameRadius = frame.radius;
+  }
+
+  /**
+   * The orbit angles that put the eye on the side of a scene direction `d`,
+   * looking back along it. Straight up or down the azimuth is free; it is
+   * taken so that `upHint`, a scene direction, points up the screen.
+   */
+  private anglesFacing(d: vec3, upHint: vec3): [number, number] {
+    const el = Math.max(-ELEVATION_LIMIT, Math.min(ELEVATION_LIMIT, Math.asin(Math.max(-1, Math.min(1, d[2])))));
+    if (Math.hypot(d[0], d[1]) > 1e-3) return [Math.atan2(d[0], -d[1]), el];
+    // Looking down or up the vertical, the screen's up is the horizontal
+    // direction the camera faces, (-sin az, cos az).
+    return [Math.atan2(-upHint[0], upHint[1]), el];
+  }
+
+  /** The scene direction from the target towards the eye. */
+  private eyeDirection(): vec3 {
+    const { azimuth: az, elevation: el } = this.camera;
+    return vec3.fromValues(Math.cos(el) * Math.sin(az), -Math.cos(el) * Math.cos(az), Math.sin(el));
   }
 
   /**
@@ -699,17 +974,14 @@ export class Scene {
    * face A up the screen.
    */
   viewAlongAxis(axis: number, duration = TRANSITION_MS): void {
+    const plus = vec3.clone([WORLD_R, WORLD_A, WORLD_S][axis]);
+    const minus = vec3.negate(vec3.create(), plus);
+    // From above or below, A goes up the screen.
+    const up = WORLD_A;
+    const [az0, el0] = this.anglesFacing(plus, up);
     const { azimuth: az, elevation: el } = this.camera;
-    const views: [number, number][][] = [
-      [[Math.PI / 2, 0], [-Math.PI / 2, 0]],
-      [[Math.PI, 0], [0, 0]],
-      // From above or below, with A up the screen and R to the right.
-      [[0, ELEVATION_LIMIT], [0, -ELEVATION_LIMIT]],
-    ];
-    const [plus, minus] = views[axis];
-    const at = (v: [number, number]) =>
-      Math.abs(wrapAngle(az - v[0])) < 1e-3 && Math.abs(el - v[1]) < 1e-3;
-    const [az1, el1] = at(plus) ? minus : plus;
+    const there = Math.abs(wrapAngle(az - az0)) < 1e-3 && Math.abs(el - el0) < 1e-3;
+    const [az1, el1] = this.anglesFacing(there ? minus : plus, up);
     this.swingCamera(az1, el1, duration);
   }
 
@@ -719,13 +991,10 @@ export class Scene {
    * turn its back.
    */
   facePlane(duration = TRANSITION_MS): void {
-    const { forward } = this.cameraBasis();
-    // The eye looks along `forward`, so it sits on the side opposite to it.
-    const toward = vec3.dot(this.n, forward) > 0 ? -1 : 1;
+    // The eye sits on whichever side of the plane is in view now.
+    const toward = vec3.dot(this.n, this.eyeDirection()) >= 0 ? 1 : -1;
     const d = vec3.scale(vec3.create(), this.n, toward);
-    const el = Math.max(-ELEVATION_LIMIT, Math.min(ELEVATION_LIMIT, Math.asin(Math.max(-1, Math.min(1, d[2])))));
-    // Straight up or down the azimuth is free: keep the current one.
-    const az = Math.hypot(d[0], d[1]) > 1e-6 ? Math.atan2(d[0], -d[1]) : this.camera.azimuth;
+    const [az, el] = this.anglesFacing(d, this.v);
     this.swingCamera(az, el, duration);
   }
 
@@ -762,7 +1031,7 @@ export class Scene {
     return true;
   }
 
-  /** Camera axes in world coordinates: screen right, screen up, and forward. */
+  /** Camera axes in the scene: screen right, screen up, and forward. */
   cameraBasis(): { right: vec3; up: vec3; forward: vec3 } {
     const { azimuth: az, elevation: el } = this.camera;
     const forward = vec3.fromValues(
@@ -805,9 +1074,10 @@ export class Scene {
     };
   }
 
+  /** The camera's matrix, scene to screen, and its eye. */
   cameraMatrix(aspect: number): { mvp: mat4; eye: vec3 } {
-    const target = this.volumeCentre();
-    const radius = this.radius();
+    const target = this.target;
+    const radius = this.frameRadius;
     const a = Math.max(aspect, 1e-3);
     // Orthographic: the half-height that just fits the bounding sphere in
     // whichever of the two directions is tighter, so a narrow pane still frames
@@ -821,14 +1091,17 @@ export class Scene {
       target[2] + dist * Math.sin(el),
     );
     const view = mat4.lookAt(mat4.create(), eye, target, [0, 0, 1]);
+    // Depth reaches well either side of the target: the pedestal can carry
+    // the body some way off it, and with an orthographic camera a deep range
+    // costs nothing but a little depth precision.
     const proj = mat4.ortho(
       mat4.create(),
       -halfH * a,
       halfH * a,
       -halfH,
       halfH,
-      radius * 0.5,
-      radius * 12,
+      -radius * 20,
+      radius * 32,
     );
     return { mvp: mat4.mul(mat4.create(), proj, view), eye };
   }

@@ -1,6 +1,6 @@
 import { mat4, vec3 } from 'gl-matrix';
 import type { Volume } from './nifti';
-import type { Scene } from './scene';
+import type { BodyMesh, Scene } from './scene';
 import type { DepthMode, LineBatch, PlaneWidget } from './widget';
 
 export interface Rect {
@@ -214,6 +214,44 @@ void main() {
   fragColor = vec4(mix(lit, uFogColor, vFog), vAlpha * edge);
 }`;
 
+/**
+ * The body surface, drawn as a ghost: lit from the eye, faint where it faces
+ * the camera and stronger where it turns away, at the outline. So the volume
+ * and its slice stay visible through it, and the body still reads as a shape.
+ */
+const BODY_VS = `#version 300 es
+in vec3 aPos;
+in vec3 aNormal;
+uniform mat4 uMVP;
+uniform mat3 uRot;
+out vec3 vNormal;
+void main() {
+  vNormal = uRot * aNormal;
+  gl_Position = uMVP * vec4(aPos, 1.0);
+}`;
+
+const BODY_FS = `#version 300 es
+precision highp float;
+in vec3 vNormal;
+uniform vec3 uToEye;
+uniform vec3 uColor;
+uniform float uOpacity;
+out vec4 fragColor;
+void main() {
+  float facing = abs(dot(normalize(vNormal), uToEye));
+  float rim = pow(1.0 - facing, 2.0);
+  vec3 c = uColor * (0.4 + 0.6 * facing) + vec3(0.18) * rim;
+  fragColor = vec4(c, (0.05 + 0.55 * rim) * uOpacity);
+}`;
+
+/** The line where the body surface crosses the slice. */
+const CONTOUR_RGB: [number, number, number] = [0.95, 0.22, 0.2];
+const CONTOUR_WIDTH = 2;
+
+/** The body's tint and its overall opacity. */
+const BODY_RGB: [number, number, number] = [0.78, 0.74, 0.7];
+const BODY_OPACITY = 0.9;
+
 const LINE_FS = `#version 300 es
 precision highp float;
 uniform vec4 uColor;
@@ -288,6 +326,11 @@ export class Renderer {
   private ribbonBuf: WebGLBuffer;
   private ribbonData = new Float32Array(8192);
 
+  private bodyProg: WebGLProgram;
+  private bodyU: Record<string, WebGLUniformLocation | null>;
+  private bodyVao: WebGLVertexArrayObject | null = null;
+  private bodyCount = 0;
+
   private tex: WebGLTexture | null = null;
   private worldToTex = mat4.create();
 
@@ -338,6 +381,9 @@ export class Renderer {
     gl.enableVertexAttribArray(aPos);
     gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
 
+    this.bodyProg = link(gl, BODY_VS, BODY_FS);
+    this.bodyU = uniforms(gl, this.bodyProg);
+
     this.ribbonProg = link(gl, RIBBON_VS, RIBBON_FS);
     this.ribbonU = uniforms(gl, this.ribbonProg);
     this.ribbonVao = gl.createVertexArray()!;
@@ -366,6 +412,62 @@ export class Renderer {
     gl.clearColor(0.06, 0.06, 0.07, 1);
     // LEQUAL rather than LESS, so geometry coplanar with the slice still draws.
     gl.depthFunc(gl.LEQUAL);
+  }
+
+  /** Upload the body surface: positions and normals interleaved, and indices. */
+  setBody(mesh: BodyMesh): void {
+    const gl = this.gl;
+    const n = mesh.positions.length / 3;
+    const inter = new Float32Array(n * 6);
+    for (let i = 0; i < n; i++) {
+      inter.set(mesh.positions.subarray(i * 3, i * 3 + 3), i * 6);
+      inter.set(mesh.normals.subarray(i * 3, i * 3 + 3), i * 6 + 3);
+    }
+    this.bodyVao = gl.createVertexArray();
+    gl.bindVertexArray(this.bodyVao);
+    const vb = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+    gl.bufferData(gl.ARRAY_BUFFER, inter, gl.STATIC_DRAW);
+    const aPos = gl.getAttribLocation(this.bodyProg, 'aPos');
+    const aNormal = gl.getAttribLocation(this.bodyProg, 'aNormal');
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 24, 0);
+    gl.enableVertexAttribArray(aNormal);
+    gl.vertexAttribPointer(aNormal, 3, gl.FLOAT, false, 24, 12);
+    const ib = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    this.bodyCount = mesh.indices.length;
+  }
+
+  /** The body surface, a translucent shell placed by the body's model. */
+  private drawBody(scene: Scene, mvp: mat4): void {
+    if (!this.bodyVao || !this.bodyCount) return;
+    const gl = this.gl;
+    const m = scene.bodyModel;
+    gl.useProgram(this.bodyProg);
+    gl.uniformMatrix4fv(this.bodyU['uMVP'] ?? null, false, mat4.mul(mat4.create(), mvp, m));
+    // The rotation part of a rigid move turns its normals.
+    gl.uniformMatrix3fv(this.bodyU['uRot'] ?? null, false, [m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]]);
+    const f = scene.cameraBasis().forward;
+    gl.uniform3f(this.bodyU['uToEye'] ?? null, -f[0], -f[1], -f[2]);
+    gl.uniform3f(this.bodyU['uColor'] ?? null, BODY_RGB[0], BODY_RGB[1], BODY_RGB[2]);
+    gl.uniform1f(this.bodyU['uOpacity'] ?? null, BODY_OPACITY);
+    // Only the outer shell, over what is already drawn and without hiding
+    // anything drawn after it.
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.BACK);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.bindVertexArray(this.bodyVao);
+    gl.drawElements(gl.TRIANGLES, this.bodyCount, gl.UNSIGNED_SHORT, 0);
+    gl.bindVertexArray(null);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.CULL_FACE);
+    gl.depthMask(true);
   }
 
   setVolume(vol: Volume): void {
@@ -457,6 +559,7 @@ export class Renderer {
     strip = false,
     depth: DepthMode = 'off',
     nudge = 0,
+    triangles = false,
   ): void {
     if (verts.length === 0) return;
     // Below one pixel there is no thinner line to draw, so a fractional width
@@ -490,10 +593,10 @@ export class Renderer {
     }
 
     const count = verts.length / 3;
-    if (strip) {
+    if (strip || triangles) {
       gl.uniform4f(this.lineU['uColor'] ?? null, color[0], color[1], color[2], alpha);
       gl.uniform2f(this.lineU['uOffset'] ?? null, 0, 0);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, count);
+      gl.drawArrays(triangles ? gl.TRIANGLES : gl.TRIANGLE_STRIP, 0, count);
     } else {
       // WebGL caps hardware line width at 1 px, so widen by redrawing offset.
       const k = Math.max(1, Math.round(width));
@@ -551,7 +654,9 @@ export class Renderer {
     if (nudge) gl.disable(gl.POLYGON_OFFSET_FILL);
   }
 
-  render(scene: Scene, widget: PlaneWidget, rect: Rect): void {
+  /** `extra` is drawn in the volume's space before the plane's widget: the pedestal. */
+  /** `pedestal` is drawn in the body's space, placed by the body's model. */
+  render(scene: Scene, widget: PlaneWidget, rect: Rect, pedestal: LineBatch[] = []): void {
     const gl = this.gl;
     const [cssH, dpr] = this.syncSize();
 
@@ -567,7 +672,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_3D, this.tex);
 
-    this.draw3D(scene, widget, rect, cssH, dpr, this.slabSteps(scene));
+    this.draw3D(scene, widget, rect, cssH, dpr, this.slabSteps(scene), pedestal);
 
     gl.disable(gl.SCISSOR_TEST);
     gl.bindVertexArray(null);
@@ -635,6 +740,7 @@ export class Renderer {
     cssH: number,
     dpr: number,
     slabSteps: number,
+    pedestal: LineBatch[],
   ): void {
     const gl = this.gl;
     this.setViewport(r, cssH, dpr);
@@ -672,6 +778,9 @@ export class Renderer {
       this.drawLines(verts, BOX_RGB, mvp, 1, boxAlpha, false, 'test');
     }
 
+    // The body, after the slice so the slice shows through it.
+    this.drawBody(scene, mvp);
+
     const poly = scene.planeOutline();
     if (poly.length >= 2) {
       const verts: number[] = [];
@@ -686,19 +795,34 @@ export class Renderer {
       this.drawLines(verts, scene.normalColor(), mvp, w, 1, false, 'off');
     }
 
-    for (const batch of widget.geometry() as LineBatch[]) {
+    // Where the body surface crosses the slice, in red over the image. The
+    // lines lie in the slice itself, so they are drawn over it rather than
+    // made to fight it for depth.
+    const contour = scene.bodyContour();
+    if (contour.length) {
+      this.drawLines(contour, CONTOUR_RGB, mvp, CONTOUR_WIDTH, 1, false, 'off');
+    }
+
+    // The pedestal lives in the body's space; the widget, in the scene's.
+    const bodyMvp = mat4.mul(mat4.create(), mvp, scene.bodyModel);
+    const batches: [LineBatch, mat4][] = [
+      ...pedestal.map((b): [LineBatch, mat4] => [b, bodyMvp]),
+      ...(widget.geometry() as LineBatch[]).map((b): [LineBatch, mat4] => [b, mvp]),
+    ];
+    for (const [batch, m] of batches) {
       if (batch.ribbon) {
-        this.drawRibbon(batch.verts, batch.color, mvp, batch.depth ?? 'off', batch.nudge);
+        this.drawRibbon(batch.verts, batch.color, m, batch.depth ?? 'off', batch.nudge);
       } else {
         this.drawLines(
           batch.verts,
           batch.color,
-          mvp,
+          m,
           batch.width,
           batch.alpha ?? 1,
           batch.strip,
           batch.depth ?? 'off',
           batch.nudge,
+          batch.triangles,
         );
       }
     }
