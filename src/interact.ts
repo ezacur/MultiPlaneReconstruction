@@ -1,10 +1,10 @@
 import type { vec3 } from 'gl-matrix';
 import { contentBox } from './layout';
 import { ELEVATION_LIMIT, type PlaneSpace, type Ray, type Scene } from './scene';
-import type { Pedestal } from './pedestal';
+import type { BodyControls } from './manip/controls';
 import type { PlaneWidget } from './widget';
 
-type Mode = 'widget' | 'pedestal' | 'orbit' | 'wl';
+type Mode = 'widget' | 'body' | 'orbit' | 'wl';
 
 interface Drag {
   pointerId: number;
@@ -40,7 +40,7 @@ export function attachInteraction(
   pane: HTMLElement,
   scene: Scene,
   widget: PlaneWidget,
-  pedestal: Pedestal,
+  controls: BodyControls,
   hooks: InteractionHooks,
 ): void {
   let drag: Drag | null = null;
@@ -53,38 +53,33 @@ export function attachInteraction(
     const ndcX = ((e.clientX - r.left) / r.width) * 2 - 1;
     const ndcY = 1 - ((e.clientY - r.top) / r.height) * 2;
     const { mvp } = scene.cameraMatrix(r.width / r.height);
+    controls.setViewport(r.width, r.height);
     return scene.rayAt(mvp, ndcX, ndcY);
   };
 
-  /** Hover: the plane's widget first, and the pedestal where it has nothing. */
+  /** Hover: the body's handles that come first, then the plane's widget, and
+   *  the body's other parts where the widget has nothing. */
   const hoverAt = (e: MouseEvent): boolean => {
     const ray = rayAt(e);
-    // The body surface brings the pedestal and the gizmo up, as they do.
-    const onBody = pedestal.setBodyHover(pedestal.overBody(ray));
-    // The gizmo's rings come first, even over the plane: they are thin, and
-    // where they show they can be taken.
-    if (pedestal.overGizmo(ray)) {
+    // The body surface brings its manipulator up, as the manipulator does.
+    const onBody = controls.setBodyHover(ray);
+    // Thin handles come first, even over the plane: where they show they can
+    // be taken.
+    if (controls.overHandle(ray)) {
       const a = widget.setHover(null);
-      const b = pedestal.setHover(ray);
+      const b = controls.setHover(ray);
       return a || b || onBody;
     }
     const a = widget.setHover(ray);
-    const b = pedestal.setHover(widget.state === null ? ray : null);
+    const b = controls.setHover(widget.state === null ? ray : null);
     return a || b || onBody;
   };
 
 
   const cursorFor = (): string => {
     if (drag?.mode === 'wl') return 'ew-resize';
-    const g = pedestal.gesture;
-    if (g === 'tilt' || g === 'spin' || g === 'gizmo') return 'grabbing';
-    if (g === 'axial') return 'ns-resize';
-    if (g === 'free' || g === 'planar') return 'move';
-    const z = pedestal.zone;
-    if (z === 'gizmo' && pedestal.gizmoRing === 4) return 'move';
-    if (z === 'rim' || z === 'gizmo') return 'pointer';
-    if (z === 'cap') return 'ns-resize';
-    if (z === 'side') return 'grab';
+    const c = controls.cursor();
+    if (c) return c;
     const st = widget.state;
     if (st === 'translate' || st === 'plane') return 'ns-resize';
     if (st === 'rotate') return 'grabbing';
@@ -142,18 +137,18 @@ export function attachInteraction(
     let mode: Mode;
     if (e.ctrlKey || e.metaKey) {
       mode = 'wl';
-    } else if (ray && e.button === 0 && pedestal.overGizmo(ray) && pedestal.begin(ray, 0)) {
-      // The gizmo's rings before the plane's ring and image.
-      mode = 'pedestal';
+    } else if (ray && controls.overHandle(ray) && controls.begin(ray, e.button)) {
+      // The body's thin handles before the plane's ring and image.
+      mode = 'body';
     } else if (onRing && ray && e.button === 0) {
       // The band is the tilt handle.
       mode = widget.begin(ray, 'rotate') ? 'widget' : 'orbit';
     } else if (onPlane && ray && slideButton) {
       // Anywhere else on the plane, and the band under any other button, slides.
       mode = widget.begin(ray, 'translate') ? 'widget' : 'orbit';
-    } else if (ray && pedestal.begin(ray, e.button)) {
-      // Off the plane, the body's pedestal moves the body.
-      mode = 'pedestal';
+    } else if (ray && controls.begin(ray, e.button)) {
+      // Off the plane, the body's other handles, such as the pedestal.
+      mode = 'body';
     } else if (e.button === 1) {
       mode = 'wl';
     } else {
@@ -189,9 +184,9 @@ export function attachInteraction(
         if (ray) widget.move(ray);
         break;
       }
-      case 'pedestal': {
+      case 'body': {
         const ray = rayAt(e);
-        if (ray) pedestal.move(ray);
+        if (ray) controls.move(ray, e.shiftKey);
         break;
       }
       case 'wl': {
@@ -222,6 +217,11 @@ export function attachInteraction(
       if (!delta) return;
       const dir = Math.sign(delta);
       const ray = rayAt(e);
+      // Alt hands the wheel to the body's manipulator, where it takes it.
+      if (e.altKey && ray && controls.wheel(ray, dir, e.shiftKey)) {
+        hooks.onChange();
+        return;
+      }
       // Over the plane the wheel belongs to the plane; off it, to the camera.
       if (ray && widget.overPlane(ray)) {
         scene.scrollSlices(-dir * (e.shiftKey ? 5 : 1));
@@ -236,7 +236,7 @@ export function attachInteraction(
   pane.addEventListener('pointerleave', () => {
     if (drag) return;
     widget.clearHover();
-    pedestal.clearHover();
+    controls.clearHover();
     hooks.onProbe(null);
     hooks.onChange();
   });
@@ -247,6 +247,8 @@ export function attachInteraction(
     // plane. On the plane otherwise, nothing; out in the open, reframe the
     // camera.
     const ray = rayAt(e);
+    // A double click on one of the body's handles is two clicks on it.
+    if (ray && controls.overHandle(ray)) return;
     const mark = ray ? widget.markAt(ray) : null;
     if (mark) {
       // A shortcut for the tilt the mark offers: it turns about that tilt's
@@ -261,7 +263,7 @@ export function attachInteraction(
   const endDrag = (e: PointerEvent) => {
     if (!drag || drag.pointerId !== e.pointerId) return;
     if (drag.mode === 'widget') widget.end();
-    if (drag.mode === 'pedestal') pedestal.end();
+    if (drag.mode === 'body') controls.end();
     if (drag.mode === 'wl') hooks.onWindowGesture(false);
     drag = null;
     try {
@@ -281,9 +283,9 @@ export function attachInteraction(
   window.addEventListener('keydown', (e) => {
     if (!scene.vol) return;
     if (e.key === 'Escape') {
-      if (!widget.active && !pedestal.active) return;
+      if (!widget.active && !controls.active) return;
       widget.cancel();
-      pedestal.cancel();
+      controls.cancel();
       drag = null;
       hooks.onChange();
       return;

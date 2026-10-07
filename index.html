@@ -26,6 +26,53 @@
           <div id="vol-info" class="mono"></div>
         </section>
 
+        <section>
+          <h2>Cuerpo</h2>
+          <label>Manipulador
+            <select id="manip"></select>
+          </label>
+          <p id="manip-help" class="note"></p>
+          <div id="lm" hidden>
+            <p id="lm-summary" class="note"></p>
+            <div class="row">
+              <button id="lm-undo">Deshacer punto</button>
+              <button id="lm-clear">Borrar puntos</button>
+            </div>
+          </div>
+          <label class="check"><input type="checkbox" id="snap" /> Ajustar a pasos de 15&deg; y
+            5 mm</label>
+          <div class="row"><button id="body-reset">Recolocar el cuerpo</button></div>
+        </section>
+
+        <section>
+          <h2>Visualizacion</h2>
+          <label>Cuerpo
+            <select id="v-body">
+              <option value="outline">Silueta</option>
+              <option value="shell">Superficie translucida</option>
+              <option value="both">Silueta y superficie</option>
+              <option value="none">Oculto</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" id="v-hidden" /> Lineas ocultas de la
+            silueta, tenues</label>
+          <label>Grosor de la silueta <span class="val" id="v-width-val"></span>
+            <input type="range" id="v-width" min="1" max="4" step="1" />
+          </label>
+          <label class="check"><input type="checkbox" id="v-contour" /> Contorno del cuerpo en el
+            corte</label>
+          <label>Caja del volumen
+            <select id="v-box">
+              <option value="hover">Al pasar sobre el corte</option>
+              <option value="always">Siempre</option>
+              <option value="never">Nunca</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" id="v-triad" /> Marcador de ejes R/A/S</label>
+          <label class="check"><input type="checkbox" id="v-fade" /> Desvanecer los manipuladores
+            sin usar</label>
+        </section>
+
         <section class="help">
           <h2>Raton</h2>
           <ul>
@@ -34,14 +81,12 @@
               cartesiano</li>
             <li><b>Imagen del corte</b>: deslizar por la normal</li>
             <li><b>Espacio vacio</b>: orbitar la camara</li>
-            <li><b>Pedestal del cuerpo, tapa</b>: el centro desplaza el cuerpo
-              por el eje del pedestal; el borde, con el izquierdo, lo inclina</li>
-            <li><b>Gizmo del centro del cuerpo</b>: un anillo (rojo R, verde A,
-              azul S) gira el cuerpo sobre ese eje; el circulo blanco, alrededor
-              de la vista; el centro lo mueve</li>
-            <li><b>Pedestal del cuerpo, lateral</b>: izquierdo lo gira sobre su
-              eje; central lo mueve libremente; derecho, en su plano</li>
-            <li><b>Rueda</b>: sobre el plano cambia de corte, fuera acerca</li>
+            <li><b>Cuerpo</b>: segun el manipulador elegido en el panel.
+              <b>Shift</b> mientras se arrastra ajusta a pasos de 15&deg; y 5 mm
+              (o deja de ajustar, si el ajuste esta marcado)</li>
+            <li><b>Rueda</b>: sobre el plano cambia de corte, fuera acerca.
+              <b>Alt + rueda</b>, con el arrastre sobre el corte: mueve el
+              cuerpo a traves del corte</li>
             <li><b>Doble clic en una marca de color del anillo</b>: gira el
               plano hasta ese plano cartesiano, sin moverlo del sitio</li>
             <li><b>I J K</b>: planos cartesianos de la rejilla</li>

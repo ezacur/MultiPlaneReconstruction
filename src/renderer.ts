@@ -1,6 +1,9 @@
 import { mat4, vec3 } from 'gl-matrix';
 import type { Volume } from './nifti';
+import type { Geometry } from './manip/common';
 import type { BodyMesh, Scene } from './scene';
+import { silhouette } from './silhouette';
+import { DEFAULT_VIEW, type ViewOptions } from './view-options';
 import type { DepthMode, LineBatch, PlaneWidget } from './widget';
 
 export interface Rect {
@@ -230,6 +233,9 @@ void main() {
   gl_Position = uMVP * vec4(aPos, 1.0);
 }`;
 
+/** The body as a shell: light from the eye, faint where the surface faces the
+ *  camera and stronger at the rim. The outline uses the same program to draw
+ *  the surface into depth only. */
 const BODY_FS = `#version 300 es
 precision highp float;
 in vec3 vNormal;
@@ -248,9 +254,13 @@ void main() {
 const CONTOUR_RGB: [number, number, number] = [0.95, 0.22, 0.2];
 const CONTOUR_WIDTH = 2;
 
-/** The body's tint and its overall opacity. */
-const BODY_RGB: [number, number, number] = [0.78, 0.74, 0.7];
-const BODY_OPACITY = 0.9;
+/** The body's outline: its colour, its width in pixels, and how faint the
+ *  stretches hidden behind the body itself or behind the slice are drawn. */
+const BODY_RGB: [number, number, number] = [1.0, 0.6, 0.18];
+const BODY_HIDDEN_ALPHA = 0.22;
+/** The shell's tint and overall opacity. */
+const SHELL_RGB: [number, number, number] = [1.0, 0.58, 0.2];
+const SHELL_OPACITY = 0.9;
 
 const LINE_FS = `#version 300 es
 precision highp float;
@@ -307,6 +317,8 @@ const BOX_RGB: [number, number, number] = [0.5, 0.54, 0.63];
 const BOX_ALPHA = 0.07;
 
 export class Renderer {
+  /** What to show and how, from the panel. */
+  options: ViewOptions = { ...DEFAULT_VIEW };
   readonly gl: WebGL2RenderingContext;
   private canvas: HTMLCanvasElement;
 
@@ -330,6 +342,7 @@ export class Renderer {
   private bodyU: Record<string, WebGLUniformLocation | null>;
   private bodyVao: WebGLVertexArrayObject | null = null;
   private bodyCount = 0;
+  private bodyMesh: BodyMesh | null = null;
 
   private tex: WebGLTexture | null = null;
   private worldToTex = mat4.create();
@@ -432,17 +445,68 @@ export class Renderer {
     const aNormal = gl.getAttribLocation(this.bodyProg, 'aNormal');
     gl.enableVertexAttribArray(aPos);
     gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 24, 0);
-    gl.enableVertexAttribArray(aNormal);
-    gl.vertexAttribPointer(aNormal, 3, gl.FLOAT, false, 24, 12);
+    // The depth pass may let the compiler drop the normals.
+    if (aNormal >= 0) {
+      gl.enableVertexAttribArray(aNormal);
+      gl.vertexAttribPointer(aNormal, 3, gl.FLOAT, false, 24, 12);
+    }
     const ib = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
     gl.bindVertexArray(null);
     this.bodyCount = mesh.indices.length;
+    this.bodyMesh = mesh;
   }
 
-  /** The body surface, a translucent shell placed by the body's model. */
-  private drawBody(scene: Scene, mvp: mat4): void {
+  /**
+   * The body as its outline, placed by the body's model: the line where its
+   * surface turns from facing the eye to facing away, worked out for the view
+   * as it is now (see silhouette.ts). The whole outline is drawn faint first,
+   * so what the body or the slice hides still shows, as hidden lines do on a
+   * drawing. Then the surface is drawn into depth only, pushed back a little,
+   * and the outline again, solid, where nothing is in front of it.
+   *
+   * It comes last: its depth would otherwise hide whatever is drawn after it
+   * behind a surface that is not drawn.
+   */
+  private drawBodyOutline(scene: Scene, mvp: mat4): void {
+    const mesh = this.bodyMesh;
+    if (!mesh || !this.bodyVao || !this.bodyCount) return;
+    const gl = this.gl;
+    const m = scene.bodyModel;
+    const bodyMvp = mat4.mul(mat4.create(), mvp, m);
+    // Towards the eye, in the body's space: the rotation's transpose.
+    const f = scene.cameraBasis().forward;
+    const toEye = [
+      -(m[0] * f[0] + m[1] * f[1] + m[2] * f[2]),
+      -(m[4] * f[0] + m[5] * f[1] + m[6] * f[2]),
+      -(m[8] * f[0] + m[9] * f[1] + m[10] * f[2]),
+    ];
+    const lines = silhouette(mesh, toEye);
+    if (this.options.hiddenLines) this.drawLines(lines, BODY_RGB, bodyMvp, 1, BODY_HIDDEN_ALPHA, false, 'off');
+
+    gl.useProgram(this.bodyProg);
+    gl.uniformMatrix4fv(this.bodyU['uMVP'] ?? null, false, bodyMvp);
+    gl.uniformMatrix3fv(this.bodyU['uRot'] ?? null, false, [m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]]);
+    gl.colorMask(false, false, false, false);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(true);
+    // Pushed back, so the outline, which lies on the surface, is not hidden
+    // by the surface it lies on.
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(1, 4);
+    gl.bindVertexArray(this.bodyVao);
+    gl.drawElements(gl.TRIANGLES, this.bodyCount, gl.UNSIGNED_SHORT, 0);
+    gl.bindVertexArray(null);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    gl.colorMask(true, true, true, true);
+
+    this.drawLines(lines, BODY_RGB, bodyMvp, this.options.outlineWidth, 1, false, 'test');
+  }
+
+  /** The body as a translucent shell, over what is already drawn and without
+   *  hiding anything drawn after it. */
+  private drawBodyShell(scene: Scene, mvp: mat4): void {
     if (!this.bodyVao || !this.bodyCount) return;
     const gl = this.gl;
     const m = scene.bodyModel;
@@ -452,10 +516,8 @@ export class Renderer {
     gl.uniformMatrix3fv(this.bodyU['uRot'] ?? null, false, [m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]]);
     const f = scene.cameraBasis().forward;
     gl.uniform3f(this.bodyU['uToEye'] ?? null, -f[0], -f[1], -f[2]);
-    gl.uniform3f(this.bodyU['uColor'] ?? null, BODY_RGB[0], BODY_RGB[1], BODY_RGB[2]);
-    gl.uniform1f(this.bodyU['uOpacity'] ?? null, BODY_OPACITY);
-    // Only the outer shell, over what is already drawn and without hiding
-    // anything drawn after it.
+    gl.uniform3f(this.bodyU['uColor'] ?? null, SHELL_RGB[0], SHELL_RGB[1], SHELL_RGB[2]);
+    gl.uniform1f(this.bodyU['uOpacity'] ?? null, SHELL_OPACITY);
     gl.enable(gl.CULL_FACE);
     gl.cullFace(gl.BACK);
     gl.enable(gl.DEPTH_TEST);
@@ -654,9 +716,9 @@ export class Renderer {
     if (nudge) gl.disable(gl.POLYGON_OFFSET_FILL);
   }
 
-  /** `extra` is drawn in the volume's space before the plane's widget: the pedestal. */
-  /** `pedestal` is drawn in the body's space, placed by the body's model. */
-  render(scene: Scene, widget: PlaneWidget, rect: Rect, pedestal: LineBatch[] = []): void {
+  /** `handles` are the body's manipulator: one list drawn in the body's
+   *  space, placed by the body's model, and one in the scene. */
+  render(scene: Scene, widget: PlaneWidget, rect: Rect, handles: Geometry = { body: [], scene: [] }): void {
     const gl = this.gl;
     const [cssH, dpr] = this.syncSize();
 
@@ -672,7 +734,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_3D, this.tex);
 
-    this.draw3D(scene, widget, rect, cssH, dpr, this.slabSteps(scene), pedestal);
+    this.draw3D(scene, widget, rect, cssH, dpr, this.slabSteps(scene), handles);
 
     gl.disable(gl.SCISSOR_TEST);
     gl.bindVertexArray(null);
@@ -740,7 +802,7 @@ export class Renderer {
     cssH: number,
     dpr: number,
     slabSteps: number,
-    pedestal: LineBatch[],
+    handles: Geometry,
   ): void {
     const gl = this.gl;
     this.setViewport(r, cssH, dpr);
@@ -765,7 +827,12 @@ export class Renderer {
     // The bounding box fades in while the pointer is over the image, and out
     // as soon as it leaves it: scaffolding, shown only while reading the slice.
     const c = scene.corners();
-    const boxAlpha = BOX_ALPHA * widget.boxShown;
+    // Always: never fainter than a steady, light trace of it.
+    const box = this.options.box;
+    const boxAlpha =
+      box === 'never' ? 0
+      : box === 'always' ? Math.max(BOX_ALPHA * 2.5, BOX_ALPHA * widget.boxShown)
+      : BOX_ALPHA * widget.boxShown;
     if (c.length === 8 && boxAlpha > 0.002) {
       // corners() enumerates i fastest, then j, then k.
       const edges = [
@@ -778,8 +845,6 @@ export class Renderer {
       this.drawLines(verts, BOX_RGB, mvp, 1, boxAlpha, false, 'test');
     }
 
-    // The body, after the slice so the slice shows through it.
-    this.drawBody(scene, mvp);
 
     const poly = scene.planeOutline();
     if (poly.length >= 2) {
@@ -798,15 +863,20 @@ export class Renderer {
     // Where the body surface crosses the slice, in red over the image. The
     // lines lie in the slice itself, so they are drawn over it rather than
     // made to fight it for depth.
-    const contour = scene.bodyContour();
+    // The shell, after the slice so the slice shows through it.
+    const style = this.options.bodyStyle;
+    if (style === 'shell' || style === 'both') this.drawBodyShell(scene, mvp);
+
+    const contour = this.options.contour ? scene.bodyContour() : [];
     if (contour.length) {
       this.drawLines(contour, CONTOUR_RGB, mvp, CONTOUR_WIDTH, 1, false, 'off');
     }
 
-    // The pedestal lives in the body's space; the widget, in the scene's.
+    // The manipulator lives partly in the body's space; the widget, in the scene's.
     const bodyMvp = mat4.mul(mat4.create(), mvp, scene.bodyModel);
     const batches: [LineBatch, mat4][] = [
-      ...pedestal.map((b): [LineBatch, mat4] => [b, bodyMvp]),
+      ...handles.body.map((b): [LineBatch, mat4] => [b, bodyMvp]),
+      ...handles.scene.map((b): [LineBatch, mat4] => [b, mvp]),
       ...(widget.geometry() as LineBatch[]).map((b): [LineBatch, mat4] => [b, mvp]),
     ];
     for (const [batch, m] of batches) {
@@ -827,10 +897,13 @@ export class Renderer {
       }
     }
 
+    // The outline last: see drawBodyOutline.
+    if (style === 'outline' || style === 'both') this.drawBodyOutline(scene, mvp);
+
     gl.disable(gl.DEPTH_TEST);
     gl.depthMask(true);
 
-    this.drawTriad(scene, r.w / r.h);
+    if (this.options.triad) this.drawTriad(scene, r.w / r.h);
   }
 
   /** RAS axis marker in the corner, so the patient's orientation is readable. */

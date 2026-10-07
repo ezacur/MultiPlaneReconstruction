@@ -11,7 +11,9 @@ import {
   type BodyMesh,
   type PlaneSpace,
 } from './scene';
-import { Pedestal } from './pedestal';
+import type { ManipId } from './manip/common';
+import { BodyControls, MANIPULATORS } from './manip/controls';
+import { loadViewOptions, saveViewOptions, type BodyStyle, type BoxMode } from './view-options';
 import { PlaneWidget } from './widget';
 
 const SAMPLES = [
@@ -43,10 +45,15 @@ const axisEls = ['R', 'A', 'S'].map((k, i) => {
 });
 const sampleSel = $<HTMLSelectElement>('#sample');
 const fileInput = $<HTMLInputElement>('#file');
+const manipSel = $<HTMLSelectElement>('#manip');
+const manipHelp = $<HTMLElement>('#manip-help');
+const snapBox = $<HTMLInputElement>('#snap');
+const lmBox = $<HTMLElement>('#lm');
+const lmSummary = $<HTMLElement>('#lm-summary');
 
 const scene = new Scene();
 const widget = new PlaneWidget(scene);
-const pedestal = new Pedestal(scene);
+const controls = new BodyControls(scene, widget);
 const colorbar = new Colorbar($<HTMLElement>('#colorbar'), {
   onLimits: (lo, hi) => {
     scene.windowWidth = Math.max(1e-6, hi - lo);
@@ -103,15 +110,15 @@ function requestRender(): void {
     // settles. Both are ticked: neither may be skipped by the other.
     const plane = scene.tickTransition(now);
     const camera = scene.tickCamera(now);
-    const ring = widget.tick(now, pedestal.active);
-    const ped = pedestal.tick(now);
-    const animating = plane || camera || ring || ped;
-    renderer.render(scene, widget, paneRect(), pedestal.geometry());
+    const ring = widget.tick(now, controls.active);
+    const body = controls.tick(now);
+    const animating = plane || camera || ring || body;
+    renderer.render(scene, widget, paneRect(), controls.geometry());
     updateOverlays();
     if (animating) requestRender();
     else {
-      // The pedestal held up after use: come back when its fade is due.
-      const wait = pedestal.untilFade(now);
+      // The body's manipulator held up after use: come back when its fade is due.
+      const wait = controls.untilFade(now);
       if (wait !== null) {
         clearTimeout(fadeTimer);
         fadeTimer = setTimeout(requestRender, wait + 20);
@@ -153,25 +160,7 @@ function updateOverlays(): void {
     `normal hacia ${directionLabel(scene.n)}, ${fmt(scene.distance)} mm del centro${thick}`;
 
   const st = widget.state;
-  const pg = pedestal.gesture;
-  const pz = pedestal.zone;
-  const ring = pedestal.gizmoRing;
-  const ringName = ring === null ? '' : ['R', 'A', 'S'][ring];
-  const pedestalHint =
-    pg === 'gizmo' && ring === 3 ? 'girando el cuerpo en el plano de la vista'
-    : pg === 'gizmo' ? `girando el cuerpo sobre su eje ${ringName}`
-    : pz === 'gizmo' && ring === 4 ? 'arrastrar mueve el cuerpo'
-    : pz === 'gizmo' && ring === 3 ? 'arrastrar gira el cuerpo en el plano de la vista'
-    : pz === 'gizmo' ? `arrastrar gira el cuerpo sobre su eje ${ringName}`
-    : pg === 'tilt' ? 'inclinando el cuerpo'
-    : pg === 'axial' ? 'desplazando el cuerpo por el eje del pedestal'
-    : pg === 'spin' ? 'girando el cuerpo sobre el eje del pedestal'
-    : pg === 'free' ? 'moviendo el cuerpo'
-    : pg === 'planar' ? 'desplazando el cuerpo en el plano del pedestal'
-    : pz === 'rim' ? 'izquierdo inclina el cuerpo; central lo desplaza por el eje'
-    : pz === 'cap' ? 'arrastrar desplaza el cuerpo por el eje del pedestal'
-    : pz === 'side' ? 'izquierdo gira el cuerpo; central lo mueve; derecho, en el plano del pedestal'
-    : '';
+  const pedestalHint = controls.hint();
   hintEl.textContent =
     pedestalHint ? pedestalHint
     : widget.hoveredMark !== null
@@ -235,7 +224,9 @@ async function loadBuffer(buf: ArrayBuffer, name: string): Promise<void> {
   colorbar.setVolume(vol);
   widget.clearHover();
   widget.reveal();
-  pedestal.reveal();
+  controls.reveal();
+  // Points in the image mean nothing in another volume.
+  controls.landmarks.clear();
   probe = null;
 
   showVolumeInfo(vol);
@@ -295,6 +286,89 @@ viewsRoot.addEventListener('drop', (e) => {
   if (f) void guarded(async () => loadBuffer(await f.arrayBuffer(), f.name));
 });
 
+// The display options: applied to the renderer and the controls, and kept in
+// this browser for next time.
+const view = loadViewOptions();
+const vBody = $<HTMLSelectElement>('#v-body');
+const vHidden = $<HTMLInputElement>('#v-hidden');
+const vWidth = $<HTMLInputElement>('#v-width');
+const vWidthVal = $<HTMLElement>('#v-width-val');
+const vContour = $<HTMLInputElement>('#v-contour');
+const vBox = $<HTMLSelectElement>('#v-box');
+const vTriad = $<HTMLInputElement>('#v-triad');
+const vFade = $<HTMLInputElement>('#v-fade');
+
+function applyView(): void {
+  renderer.options = { ...view };
+  controls.fadeEnabled = view.fadeHandles;
+  controls.reveal();
+  // The outline's own settings mean nothing without an outline.
+  const outline = view.bodyStyle === 'outline' || view.bodyStyle === 'both';
+  vHidden.disabled = !outline;
+  vWidth.disabled = !outline;
+  vWidthVal.textContent = `${view.outlineWidth} px`;
+  // The marker's letters are part of it.
+  for (const el of axisEls) el.style.display = view.triad ? '' : 'none';
+  saveViewOptions(view);
+  requestRender();
+}
+
+vBody.value = view.bodyStyle;
+vHidden.checked = view.hiddenLines;
+vWidth.value = String(view.outlineWidth);
+vContour.checked = view.contour;
+vBox.value = view.box;
+vTriad.checked = view.triad;
+vFade.checked = view.fadeHandles;
+const onView = (el: HTMLElement, ev: string, set: () => void) =>
+  el.addEventListener(ev, () => {
+    set();
+    applyView();
+  });
+onView(vBody, 'change', () => (view.bodyStyle = vBody.value as BodyStyle));
+onView(vHidden, 'change', () => (view.hiddenLines = vHidden.checked));
+onView(vWidth, 'input', () => (view.outlineWidth = Number(vWidth.value)));
+onView(vContour, 'change', () => (view.contour = vContour.checked));
+onView(vBox, 'change', () => (view.box = vBox.value as BoxMode));
+onView(vTriad, 'change', () => (view.triad = vTriad.checked));
+onView(vFade, 'change', () => (view.fadeHandles = vFade.checked));
+applyView();
+
+// The body's manipulator, chosen in the panel. Its help and, for the
+// landmarks, their state and buttons, sit under the choice.
+for (const m of MANIPULATORS) {
+  const o = document.createElement('option');
+  o.value = m.id;
+  o.textContent = m.label;
+  manipSel.appendChild(o);
+}
+
+function updateBodyPanel(): void {
+  const m = MANIPULATORS.find((x) => x.id === controls.current.id);
+  manipHelp.textContent = m?.help ?? '';
+  const lm = controls.current.id === 'landmarks';
+  lmBox.hidden = !lm;
+  if (lm) lmSummary.textContent = controls.landmarks.summary();
+}
+
+controls.onChange = () => {
+  updateBodyPanel();
+  requestRender();
+};
+
+manipSel.addEventListener('change', () => {
+  controls.setMode(manipSel.value as ManipId);
+  updateBodyPanel();
+  requestRender();
+});
+snapBox.addEventListener('change', () => {
+  controls.snap = snapBox.checked;
+});
+$<HTMLButtonElement>('#lm-undo').addEventListener('click', () => controls.landmarks.undo());
+$<HTMLButtonElement>('#lm-clear').addEventListener('click', () => controls.landmarks.clear());
+$<HTMLButtonElement>('#body-reset').addEventListener('click', () => controls.resetBody());
+updateBodyPanel();
+
 // The corner axis marker is a control: clicking an axis swings the camera
 // round to look along it, that axis towards the viewer, and clicking it again
 // goes round to the other side. The labels sit inside the pane, so their
@@ -311,7 +385,7 @@ axisEls.forEach((el, i) => {
   });
 });
 
-attachInteraction(pane, scene, widget, pedestal, {
+attachInteraction(pane, scene, widget, controls, {
   onChange: requestRender,
   onProbe: (w) => {
     probe = w;
@@ -366,7 +440,7 @@ async function loadBody(): Promise<void> {
   };
   renderer.setBody(mesh);
   scene.setBody(mesh);
-  pedestal.reveal();
+  controls.reveal();
   requestRender();
 }
 loadBody().catch((err) => console.error(err));

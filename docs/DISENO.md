@@ -207,10 +207,29 @@ triangulos que cruzan el corte se recortan con vertices nuevos sobre el, para
 que la base sea un borde limpio, y el corte queda en S = 0. El resultado,
 `public/models/body.json`, son unos 2700 vertices y 3600 triangulos.
 
-El cuerpo se dibuja como una sombra: luz desde el ojo, opacidad baja donde la
-superficie mira a la camara y alta en el contorno, solo las caras delanteras,
-con mezcla y sin escribir profundidad, y despues del corte, de modo que el
-corte y el volumen se ven a traves y el cuerpo se lee por su silueta.
+El cuerpo se dibuja solo por su silueta: la linea donde la superficie pasa de
+mirar al ojo a darle la espalda, calculada en cada frame para la vista de ese
+momento (`src/silhouette.ts`). Tomada arista a arista entre triangulos
+delanteros y traseros, en una malla tan gruesa como esta saldria en zigzag por
+los triangulos. Se toma en cambio donde la superficie suave que describen las
+normales de los vertices queda de canto: en cada triangulo, la recta donde la
+normal interpolada es perpendicular a la vista, entre los dos puntos de sus
+aristas donde eso cruza cero, igual que se calcula el contorno del corte. Asi
+salen curvas suaves y unidas. Se descartan los triangulos que miran claramente
+al ojo o en sentido contrario (coseno mayor de 0.5), donde un cruce solo puede
+venir de normales que no encajan con la forma, y se anade el borde abierto del
+corte de la cadera. Para hallar ese borde, y las aristas de las sombras, los
+vertices en el mismo sitio cuentan como uno: el modelo los duplica en las
+costuras de la textura, y sin soldarlos las costuras de la cabeza se leian
+como bordes.
+
+La silueta se dibuja al final, en tres pasadas: toda ella tenue, sin prueba de
+profundidad, para que lo que tapan el propio cuerpo o el corte se siga viendo,
+como las lineas ocultas de un plano; luego la superficie solo en profundidad,
+sin color y empujada un poco hacia atras para no tapar la linea que esta sobre
+ella; y la silueta otra vez, solida, donde nada la tapa. Va la ultima porque su
+profundidad ocultaria lo que se dibujara despues detras de una superficie que
+no se ve.
 
 Donde el cuerpo cruza el plano de corte se dibuja una linea roja. Se calcula en
 cada frame: cada triangulo del cuerpo, alli donde lo haya puesto el pedestal,
@@ -257,8 +276,8 @@ Sus gestos:
 | Lateral | central | Mover en el plano de la pantalla |
 | Lateral | derecho | Mover en el plano perpendicular al eje |
 
-En el centro del cuerpo, el de la caja del busto, hay un gizmo de rotacion
-tradicional: tres anillos de radio el 28 por ciento del del pedestal, sobre los
+Con la orbita, en el centro del cuerpo, el de la caja del busto, hay un gizmo
+de rotacion tradicional: tres anillos de radio el 28 por ciento del del pedestal, sobre los
 ejes R, A y S del cuerpo, en rojo, verde y azul, que giran el cuerpo alrededor
 de ese centro. Se cogen antes que todo lo demas, el anillo y la imagen del plano
 de corte incluidos, si el puntero pasa a menos del 8 por ciento de su radio de
@@ -273,7 +292,7 @@ cuatro flechas, que lo mueve en el plano de la pantalla.
 El pedestal y el gizmo se desvanecen cuando no se usan. Aparecen en 0.25
 segundos mientras se arrastran o el puntero esta sobre el pedestal, el gizmo o
 el propio cuerpo (el rayo se prueba contra los triangulos del busto), se
-mantienen 10 segundos tras el ultimo uso y se apagan en 1.5. Durante esa espera
+mantienen 5 segundos tras el ultimo uso y se apagan en 1.5. Durante esa espera
 no hace falta redibujar: la app programa un unico redibujado para cuando toca
 empezar el fundido. Mientras se desvanecen ninguna parte escribe profundidad,
 para no tapar nada a medio camino.
@@ -319,6 +338,127 @@ vista seguiria al cuerpo mientras el pedestal lo mueve, y la camara se moveria
 bajo el gesto. La profundidad de la camara se extiende de sobra a los
 dos lados del punto de mira, para que el pedestal pueda alejar el cuerpo sin
 recortarlo.
+
+## Los manipuladores del cuerpo
+
+El pedestal y el gizmo de anillos son dos de los nueve manipuladores del
+cuerpo, el pedestal y la orbita, y el panel elige cual esta activo. Los dos
+salen de la misma clase, `Pedestal`, que segun su modo solo coge y dibuja sus
+propias piezas. Todos cumplen el mismo contrato (`Manipulator`, en
+`src/manip/common.ts`): dicen si un rayo coge una de sus asas finas, que van
+antes que el anillo y la imagen del plano; empiezan, siguen y terminan un
+arrastre; deshacen el arrastre con Esc; dan su texto de ayuda y su cursor; y
+devuelven su geometria, una parte en el espacio del cuerpo y otra en el de la
+escena. Todos mueven el cuerpo cambiando `scene.bodyModel`, y todos sus gestos
+son absolutos: cada paso se calcula desde la colocacion del principio del
+arrastre. Los que trabajan en la escena componen su movimiento delante de esa
+colocacion (`local * model0`); el pedestal, que trabaja en el espacio del
+cuerpo, detras (`model0 * local`).
+
+`BodyControls` (`src/manip/controls.ts`) guarda los nueve y reparte los eventos
+al activo, y lleva lo que comparten:
+
+- el **desvanecido**, el mismo de antes (0.25 s de entrada, 5 s de espera,
+  1.5 s de salida), que cuenta como uso el arrastre, el puntero sobre una asa o
+  sobre el cuerpo y las transiciones. La alineacion por puntos no se desvanece:
+  sus puntos son el trabajo en curso;
+- el **ajuste a pasos**: 15 grados en los giros y 5 mm en los desplazamientos.
+  Un desplazamiento se redondea a lo largo de los ejes propios del gesto (el
+  eje de la flecha, los dos del plano o los de la pantalla), y lo que tenga
+  fuera de ellos se descarta. Un giro libre, como el del trackball, redondea su
+  angulo y conserva su eje. La casilla del panel lo activa; Shift durante el
+  arrastre lo invierte;
+- las **transiciones**: el cubo y la alineacion por puntos no mueven el cuerpo
+  de golpe, sino que lo llevan en 450 ms a su sitio. Se interpola el giro con
+  slerp y la traslacion del centro del cuerpo, no la de su origen, para que gire
+  sobre si mismo en vez de barrer un arco alrededor del corte de la cadera;
+- la **prueba del rayo contra el cuerpo** (Moller-Trumbore sobre sus
+  triangulos), que da el punto de la superficie para la alineacion y la
+  presencia del puntero sobre el cuerpo para el desvanecido;
+- el **tamano del pixel** en milimetros de escena, que el raton actualiza en
+  cada evento, para que las tolerancias de las asas se midan en pixeles y no
+  cambien con el zoom.
+
+Las asas de los gizmos son las de los editores 3D, en `src/manip/handles.ts`:
+una flecha mueve a lo largo de su eje (el rayo se proyecta sobre la recta por el
+punto agarrado, como el desplazamiento del plano), un cuadrado mueve en el
+plano de sus dos ejes, un anillo gira por arrastre tangencial alrededor de su
+eje por el centro del gizmo, y el centro mueve en el plano de la pantalla. Se
+cogen a menos de 8 pixeles; el asa ofrecida se aclara y engruesa, y la flecha
+cogida muestra su recta discontinua. De ahi salen dos manipuladores:
+
+- **Gizmo anclado al plano de corte.** Se coloca en el plano, donde cae en
+  perpendicular el centro del cuerpo, y usa los ejes del plano: la flecha de la
+  normal, en su color y hacia el lado de la camara; dos flechas blancas por u y
+  v; un cuadrado en el plano; y un anillo alrededor de la normal. Cada asa
+  cambia el contorno rojo de una manera clara: la normal lo hace crecer o
+  menguar, las del plano lo desplazan y el anillo lo gira.
+- **Flechas de traslacion.** En el centro del cuerpo, por los ejes R, A y S de
+  la escena (no los del cuerpo, para que un movimiento siga las direcciones del
+  volumen aunque el cuerpo este girado), con tres cuadrados entre cada dos ejes,
+  cada uno en el color del eje que deja quieto, y el centro.
+
+**Arrastre sobre el corte.** Sin asas: con el boton izquierdo, la imagen
+del corte es del cuerpo y no del plano (el anillo del plano sigue siendo suyo).
+Dentro del contorno rojo traslada el cuerpo por el plano; fuera, lo gira
+alrededor de la normal por el centro del contorno, con el angulo del puntero
+alrededor de ese centro. Para saber si un punto esta dentro no hace falta
+ordenar los segmentos del contorno: basta contar cuantos cruza una semirrecta
+desde el punto, y si son impares esta dentro. El centro es la media de los
+puntos medios de los segmentos ponderada por su longitud. Sin contorno, toda la
+imagen cuenta como dentro. Alt + rueda mueve el cuerpo por la normal un corte
+por paso, el mismo paso que la rueda da al plano.
+
+**Alineacion por puntos.** Clic en el cuerpo pone un punto, en su espacio, para
+que viaje con el; clic en la imagen pone su pareja, en la escena, para que se
+quede con el volumen. Con cada pareja completa el cuerpo se lleva a la
+colocacion rigida que mejor las junta: con una, la traslacion que las hace
+coincidir; con dos, el menor giro que alinea los segmentos y la traslacion que
+junta sus puntos medios, porque dos puntos no fijan el giro alrededor de su
+recta y asi se toca lo menos posible; con tres o mas, el ajuste por minimos
+cuadrados de Horn, cuyo giro es el vector propio del mayor valor propio de una
+matriz simetrica de 4 por 4 hecha con la covarianza cruzada de los puntos,
+calculado aqui con barridos de Jacobi. El panel da la distancia media que queda
+entre las parejas. Los puntos del cuerpo son discos con borde oscuro; los de la
+imagen, anillos del mismo color; una linea discontinua une los de cada pareja
+mientras esten separados. Cada punto se puede arrastrar (el del cuerpo por su
+superficie, el de la imagen por el corte), y al soltarlo se reajusta.
+
+**Trackball.** Una esfera del 40 por ciento de la altura del busto alrededor de
+su centro. El puntero se pone sobre ella como en el trackball de Bell: sobre la
+esfera cerca del centro y sobre una hoja hiperbolica mas alla, para que el giro
+siga suave al cruzar el borde. El giro es el que lleva el punto de la pulsacion
+al punto actual. El borde, a 9 pixeles, gira alrededor de la linea de vision
+con el angulo del puntero alrededor del centro. Tres circulos maximos sobre los
+ejes del cuerpo giran con el y dejan ver el rodar.
+
+**Cubo de orientacion.** Un cubo flotando sobre la cabeza, en el espacio del
+cuerpo, con las caras R, L, A, P, S e I: las positivas en los colores de los
+ejes y las negativas en un tono mas oscuro, con la letra trazada con lineas. Se
+dibujan solo las caras que miran a la camara; al ser convexo, nunca se tapan
+entre si y no hace falta ordenarlas. Un clic en una cara lleva el cuerpo al
+giro que pone esa cara de frente a la camara y su letra derecha: el giro que
+lleva la terna de la cara (derecha, arriba, normal) a la de la pantalla. Un
+clic derecho la pone de frente al plano de corte, por el lado de la camara, con
+el arriba de la pantalla tumbado en el plano. Arrastrar gira el cuerpo: lo que
+recorre el puntero en horizontal gira alrededor del arriba de la pantalla, y en
+vertical alrededor de su derecha, un cuarto de vuelta por cada ancho del cubo.
+Una pulsacion que se mueve menos de 4 pixeles es un clic.
+
+**Sombras en las paredes.** Las paredes son las caras del fondo de una sala con
+los ejes de la rejilla del volumen, que abarca el volumen y la caja del cuerpo
+alli donde este, con un 6 por ciento de margen: con un estudio pequeno y un
+busto grande, las paredes del volumen se quedarian cortas para sus sombras.
+Para cada eje se elige la cara que se aleja de la camara, y durante un arrastre
+la pared cogida se queda quieta. La sombra es la proyeccion perpendicular a la
+pared: el relleno, los triangulos del cuerpo vueltos hacia la pared, que entre
+todos cubren la silueta mas o menos una vez; y el contorno, las aristas entre un
+triangulo vuelto hacia la pared y otro que no, mas el borde abierto del corte
+de la cadera. La adyacencia de aristas y las normales se calculan una vez por
+malla. Una sombra se coge donde se ve, no a traves de la imagen del corte, que
+tapa las paredes de detras. Arrastrarla mueve el cuerpo en el plano de su
+pared, y mientras tanto una linea discontinua une el centro del cuerpo con su
+sombra.
 
 ## El color del borde
 
@@ -505,6 +645,9 @@ que en el demo.
 | Reencuadrar la camara | Doble clic en el vacio |
 | Mirar a lo largo de un eje | Clic en la letra R, A o S del marcador de ejes |
 | Mirar el corte de frente | Doble clic derecho sobre la imagen |
+| Mover el cuerpo | Segun el manipulador elegido en el panel |
+| Ajustar el cuerpo a pasos | Shift durante el arrastre, o la casilla del panel |
+| Mover el cuerpo a traves del corte | Alt + rueda sobre la imagen, con el arrastre sobre el corte |
 | Cancelar el arrastre | Esc |
 
 El reparto es espacial: sobre lo que el plano dibuja el raton manda sobre el
@@ -526,7 +669,19 @@ abajo se quedan a 86 grados, el tope de la orbita, porque la camara mantiene S
 como su arriba y en el polo no tendria derecha.
 
 El panel lateral se queda con lo minimo: el volumen de ejemplo y abrir uno
-propio, los datos del volumen cargado y la ayuda de los gestos. La ventana se
+propio, los datos del volumen cargado, el manipulador del cuerpo con su ayuda,
+el ajuste a pasos y el boton de recolocar, las opciones de visualizacion y la
+ayuda de los gestos.
+
+Las opciones de visualizacion (`src/view-options.ts`) solo tocan el dibujo: el
+estilo del cuerpo (silueta, la superficie translucida de antes, las dos, u
+oculto), las lineas ocultas y el grosor de la silueta, el contorno rojo, cuando
+se ve la caja del volumen, el marcador de ejes y si los manipuladores se
+desvanecen. El renderer las lee de `renderer.options` y los controles del cuerpo
+la del desvanecido. Se guardan en el `localStorage` del navegador: una
+comodidad de quien mira, que si falta o lo rechaza deja los valores por
+defecto. Con la superficie, esta se dibuja donde antes, despues del corte y sin
+escribir profundidad; la silueta sigue yendo la ultima. La ventana se
 lleva entera desde la barra de grises, y el valor bajo el raton se lee en su
 aguja. El corte es siempre fino: espesor cero y proyeccion media, que con un
 solo punto es el valor interpolado trilinealmente. El shader conserva el slab
@@ -555,6 +710,10 @@ En `public/data`, descargados de
 | `src/scene.ts` | El plano, el pivote, los planos cartesianos, las transiciones animadas del plano y de la camara, el color direccional, el recorte del plano contra el volumen, la camara 3D, el marcador de ejes y el lanzado de rayos. |
 | `src/widget.ts` | El manipulador: el anillo, el ciclo del arrastre y la geometria de las guias. |
 | `src/pedestal.ts` | El pedestal del cuerpo: geometria, zonas y gestos que lo mueven en la escena. |
+| `src/manip/controls.ts` | Los manipuladores: elige el activo, reparte los eventos y lleva el desvanecido, el ajuste a pasos, las transiciones y la prueba del rayo contra el cuerpo. |
+| `src/manip/common.ts` | El contrato de los manipuladores y lo que comparten: espacios, giros, pasos, pruebas de rayos y piezas de dibujo. |
+| `src/manip/handles.ts` | Gizmos de flechas, cuadrados, anillos y centro; de ahi salen `plane-gizmo.ts` y `arrows.ts`. |
+| `src/manip/slice-drag.ts`, `landmarks.ts`, `trackball.ts`, `cube.ts`, `shadows.ts` | Un manipulador cada uno. |
 | `tools/body-from-gltf.mjs` | Genera `public/models/body.json` desde el glTF de Cesium Man. |
 | `src/renderer.ts` | WebGL2: textura 3D, shader de reslice, la vista y el dibujo de lineas. |
 | `src/interact.ts` | Raton, rueda y las teclas I, J, K y Esc. |

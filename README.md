@@ -15,8 +15,11 @@ cuesta lo mismo que uno axial.
 - un manipulador 3D (el anillo) para inclinar y deslizar el plano, que indica
   desde donde se llega a cada plano cartesiano y deja el plano sobre ellos con
   un leve iman;
-- una silueta de cuerpo humano (un busto) sobre un pedestal, que se gira y se
-  mueve alrededor del volumen para ver en que parte del cuerpo cae el estudio;
+- una silueta de cuerpo humano (un busto) que se gira y se mueve alrededor del
+  volumen para ver en que parte del cuerpo cae el estudio, con nueve maneras de
+  colocarlo a elegir en el panel: pedestal, gizmo de orbita, gizmo anclado al corte, arrastre
+  sobre el corte, alineacion por puntos, flechas, trackball, cubo de
+  orientacion y sombras en las paredes;
 - una barra de grises interactiva con histograma: ventana / nivel, deformacion
   de la rampa, colores de saturacion e iman de percentiles;
 - lineas de nivel (isolineas) sobre el corte, en vivo o fijadas;
@@ -164,25 +167,12 @@ de la rejilla del volumen, el plano se asienta exactamente sobre el gracias a un
 iman de 2.5 grados. El plano nunca se sale del volumen: si al girar quedaria
 fuera, se mantiene dentro, junto a la cara mas cercana.
 
-### El cuerpo y su pedestal
-
-En el centro del cuerpo hay un **gizmo de rotacion** como el de los editores
-3D: tres anillos pequenos sobre los ejes del propio cuerpo, rojo para R, verde
-para A y azul para S, que giran el cuerpo sobre ese eje alrededor de su centro;
-un circulo exterior blanco, siempre de frente a la camara, que lo gira alrededor
-de la linea de vision; y un centro con cuatro flechas que lo mueve en el plano
-de la pantalla. La pieza bajo el raton se resalta.
-
-El pedestal y el gizmo se desvanecen cuando no se usan: aparecen en un cuarto de
-segundo en cuanto el raton pasa por el cuerpo, el pedestal o el gizmo, siguen
-visibles unos 10 segundos despues de dejar de usarlos y luego se apagan. Se
-pueden coger aunque esten ocultos: pasar por encima los hace aparecer. Los anillos se cogen antes que
-cualquier otra cosa, el plano de corte incluido: son finos y, donde se ven, se
-pueden coger.
+### El cuerpo y como colocarlo
 
 Junto al volumen hay una **silueta de cuerpo humano**: un busto (tronco, brazos
-y cabeza) dibujado como una sombra translucida, mas marcada en el contorno, para
-que el volumen y el corte se vean a traves. Esta en las mismas coordenadas del
+y cabeza) dibujado solo por su contorno, como un dibujo de linea, para que el
+volumen y el corte se vean sin nada delante. Los tramos del contorno que tapan
+el propio cuerpo o el corte se ven tenues, como las lineas ocultas de un plano. Esta en las mismas coordenadas del
 paciente que el volumen y arranca con el ombligo en el centro del volumen, lo
 que encaja con un TC de abdomen; para otras regiones se recoloca a mano.
 
@@ -190,16 +180,70 @@ Donde el cuerpo atraviesa el plano de corte se dibuja una **linea roja** sobre
 la imagen: la seccion del cuerpo a esa altura, que dice de un vistazo como
 encaja el estudio en el contorno del cuerpo.
 
-El busto descansa sobre un **pedestal**, un cilindro bajo el corte de la cadera,
-y es el pedestal lo que lo mueve. El volumen y el plano de corte no se mueven:
-se lleva el cuerpo hasta el estudio, no al reves.
+Se mueve solo el cuerpo: el volumen y el plano de corte se quedan quietos, y se
+lleva el cuerpo hasta el estudio, no al reves. En la seccion **Cuerpo** del
+panel se elige el **manipulador**, la manera de moverlo, y debajo aparece una
+explicacion corta de sus gestos:
+
+| Manipulador | Que hace |
+| --- | --- |
+| Pedestal | El pedestal bajo el busto (ver mas abajo). |
+| Gizmo de orbita | El gizmo de anillos en el centro del cuerpo (ver mas abajo). |
+| Gizmo anclado al plano de corte | Un gizmo sobre el corte, con los ejes del plano: la flecha de la normal mueve el cuerpo a traves del corte, las flechas blancas y el cuadrado lo deslizan por el plano, y el anillo lo gira dentro de la imagen. |
+| Arrastre sobre el corte | Sin gizmo: con el boton izquierdo sobre la imagen, dentro del contorno rojo se traslada el cuerpo por el plano y fuera se gira alrededor de la normal. **Alt + rueda** lo mueve a traves del corte, un corte cada paso. El central y el derecho siguen deslizando el plano. |
+| Alineacion por puntos | Clic en un punto del cuerpo y luego clic en la imagen, donde deberia caer. Con cada pareja el cuerpo se ajusta a todas a la vez; los puntos se pueden arrastrar para corregirlos. Botones para deshacer el ultimo punto o borrarlos todos. |
+| Flechas de traslacion | Flechas R, A y S del espacio del volumen en el centro del cuerpo, cuadrados para moverlo en el plano de dos ejes y un centro para moverlo en el plano de la pantalla. |
+| Trackball | Una esfera alrededor del cuerpo: arrastrar dentro la hace rodar y gira el cuerpo libremente; el borde lo gira alrededor de la linea de vision. |
+| Cubo de orientacion | Un cubo con caras R, L, A, P, S e I flotando sobre la cabeza. Clic en una cara: la pone de frente a la camara y derecha; clic derecho: de frente al plano de corte. Arrastrar el cubo gira el cuerpo. |
+| Sombras en las paredes | La silueta del cuerpo proyectada en las tres paredes del fondo de una sala alrededor del volumen y el cuerpo. Arrastrar una sombra mueve el cuerpo en el plano de esa pared. |
+
+Con **Ajustar a pasos** marcado, los giros avanzan de 15 en 15 grados y los
+desplazamientos de 5 en 5 mm. **Shift** durante el arrastre invierte el ajuste:
+lo activa si esta desmarcado y lo quita si esta marcado. **Recolocar el
+cuerpo** lo devuelve a su sitio de partida.
+
+Los manipuladores se desvanecen cuando no se usan: aparecen en un cuarto de
+segundo en cuanto el raton pasa por el cuerpo o por ellos, siguen visibles unos
+5 segundos y luego se apagan. Los puntos de la alineacion no se desvanecen.
+Las asas finas se cogen antes que el plano de corte: donde se ven, se pueden
+coger.
+
+#### Opciones de visualizacion
+
+La seccion **Visualizacion** del panel cambia lo que se dibuja, nunca los datos
+ni los gestos, y el navegador la recuerda para la proxima vez:
+
+| Opcion | Que hace |
+| --- | --- |
+| Cuerpo | Silueta (por defecto), superficie translucida, las dos, u oculto. |
+| Lineas ocultas de la silueta | Los tramos tapados por el cuerpo o el corte, tenues. |
+| Grosor de la silueta | De 1 a 4 pixeles. |
+| Contorno del cuerpo en el corte | La linea roja sobre la imagen. |
+| Caja del volumen | Al pasar sobre el corte (por defecto), siempre o nunca. |
+| Marcador de ejes R/A/S | El de la esquina inferior izquierda, con sus letras. |
+| Desvanecer los manipuladores sin usar | Desmarcado, quedan siempre a la vista. |
+
+#### Pedestal y gizmo de orbita
+
+Son dos manipuladores distintos. Con el **gizmo de orbita**, en el centro del
+cuerpo hay un **gizmo de rotacion** como el de los editores
+3D: tres anillos pequenos sobre los ejes del propio cuerpo, rojo para R, verde
+para A y azul para S, que giran el cuerpo sobre ese eje alrededor de su centro;
+un circulo exterior blanco, siempre de frente a la camara, que lo gira alrededor
+de la linea de vision; y un centro con cuatro flechas que lo mueve en el plano
+de la pantalla. La pieza bajo el raton se resalta.
+
+Los anillos se cogen antes que cualquier otra cosa, el plano de corte incluido.
+
+Con el **pedestal**, el busto descansa sobre un cilindro bajo el corte de la
+cadera, que es lo que lo mueve.
 
 | Donde | Boton | Que hace |
 | --- | --- | --- |
-| Borde de la tapa | izquierdo | Inclina el cuerpo alrededor del centro de la tapa |
-| Anillo del gizmo, en el centro del cuerpo | izquierdo | Gira el cuerpo sobre ese eje: rojo R, verde A, azul S |
-| Circulo blanco del gizmo | izquierdo | Lo gira alrededor de la linea de vision |
-| Centro del gizmo | izquierdo | Lo mueve en el plano de la pantalla |
+| Gizmo de orbita: anillo | izquierdo | Gira el cuerpo sobre ese eje: rojo R, verde A, azul S |
+| Gizmo de orbita: circulo blanco | izquierdo | Lo gira alrededor de la linea de vision |
+| Gizmo de orbita: centro | izquierdo | Lo mueve en el plano de la pantalla |
+| Pedestal: borde de la tapa | izquierdo | Inclina el cuerpo alrededor del centro de la tapa |
 | Centro de la tapa | izquierdo o central | Lo desplaza a lo largo del eje del pedestal |
 | Borde de la tapa | central | Tambien lo desplaza a lo largo del eje |
 | Lateral | izquierdo | Lo gira sobre el eje del pedestal, arrastrando el punto agarrado |
@@ -359,6 +403,7 @@ node tools/niftiinfo.mjs ruta/al/fichero.nii.gz
 | `src/scene.ts` | El estado: el plano, la camara, los planos cartesianos, las transiciones animadas y la geometria de seleccion. |
 | `src/widget.ts` | El manipulador: anillo, marcas, eje, arco, guias y el ciclo de arrastre. |
 | `src/pedestal.ts` | El pedestal del cuerpo: su geometria, sus zonas y los gestos que lo mueven. |
+| `src/manip/` | Los manipuladores del cuerpo: `controls.ts` elige el activo y lleva el desvanecido, el ajuste a pasos y las transiciones; `common.ts`, lo que comparten; `handles.ts`, las flechas, cuadrados y anillos de los gizmos; y un fichero por manipulador. |
 | `public/models/body.json` | La superficie del cuerpo, un busto, generada desde CesiumMan. |
 | `tools/body-from-gltf.mjs` | Convierte el modelo glTF de CesiumMan en `body.json`: rota a RAS, escala y corta a media altura. |
 | `src/renderer.ts` | WebGL2: textura 3D, shader de corte con lineas de nivel, y dibujo de lineas y cintas. |

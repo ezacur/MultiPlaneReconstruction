@@ -1106,6 +1106,13 @@ export class Scene {
     return { mvp: mat4.mul(mat4.create(), proj, view), eye };
   }
 
+  /** Scene millimetres per CSS pixel in a view `w` by `h` pixels. */
+  pixelSize(w: number, h: number): number {
+    const a = Math.max(w / Math.max(h, 1), 1e-3);
+    const halfH = Math.max(this.frameRadius, this.frameRadius / a) * this.camera.zoom;
+    return (2 * halfH) / Math.max(h, 1);
+  }
+
   /** Ray through a point given in normalised device coordinates. */
   rayAt(mvp: mat4, ndcX: number, ndcY: number): Ray | null {
     const inv = mat4.invert(mat4.create(), mvp);
